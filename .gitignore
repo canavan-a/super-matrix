@@ -1,0 +1,14 @@
+.data/
+.env
+server/tmp/
+server/*.db
+*.apk
+*.aab
+.DS_Store
+# go build output in server/ (go build ./cmd/...), nix build links, direnv
+/server/supermatrix-server
+/server/supermatrix-relay
+/server/supermatrix-admin
+result
+result-*
+.direnv/

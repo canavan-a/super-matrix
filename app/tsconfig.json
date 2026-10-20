@@ -1,0 +1,12 @@
+{
+  "extends": "@react-native/typescript-config/tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2021", "DOM"],
+    // The base RN preset pins "es2015" (fine for Metro's own transpile),
+    // but tsc's own type-checker rejects dynamic import() syntax under that
+    // setting even though Metro/Babel handle it at runtime just fine.
+    // Overriding just for tsc's sake — background notifications' Platform-
+    // gated dynamic import()s of notifee need this to typecheck at all.
+    "module": "esnext"
+  }
+}

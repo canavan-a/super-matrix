@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover: draw edge to edge and keep clear of the notch and
+         home indicator ourselves (safe-area insets below). maximum-scale=1:
+         iOS Safari zooms in on focusing an input under 16px, which shoved the
+         layout sideways and the message box out of view. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover" />
+    <title>Super Matrix</title>
+    <!-- Installable web app (PWA): the manifest, icons, and what iOS needs to
+         run it from the home screen like an app (no browser bars, its own
+         icon and launch screen). The launch-screen links are added at build
+         time from public/splash/splash.json (pwa/vite-plugin.ts). -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" href="/icons/favicon-64.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="application-name" content="Super Matrix" />
+    <meta name="apple-mobile-web-app-title" content="Super Matrix" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- Draw under the status bar; #root keeps clear of it with the safe-area
+         inset below, and the page behind it is the theme's background. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- Updated to the current theme by src/pwa/pwa.web.ts. -->
+    <meta name="theme-color" content="#0d1117" />
+    <meta name="format-detection" content="telephone=no" />
+    <style>
+      /* react-native-web's flex:1 (SafeAreaView, our screens, FlatList,
+         absolutely-positioned things like the FAB) only fills real space if
+         the DOM ancestor chain down to #root actually has a height. */
+      html, body {
+        height: 100%;
+        margin: 0;
+        /* The app scrolls inside itself; the page never does (on iOS a page
+           scroll is what slid the message box under the toolbar). */
+        overflow: hidden;
+        overscroll-behavior: none;
+        /* The theme's background (set by src/pwa/pwa.web.ts), so nothing
+           white shows behind the status bar or while launching. */
+        background: #0d1117;
+        /* App-like touch: no grey flash on tap, no 300ms double-tap-zoom
+           wait, no text inflation on rotate, no long-press callout. */
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+        -webkit-touch-callout: none;
+      }
+      #root {
+        display: flex;
+        flex-direction: column;
+        /* The visible area, not iOS Safari's largest one (which runs behind
+           its bottom toolbar). The script below narrows it further while the
+           keyboard is up. */
+        height: 100%;
+        height: 100dvh;
+        height: var(--app-height, 100dvh);
+        padding-top: env(safe-area-inset-top);
+        padding-bottom: env(safe-area-inset-bottom);
+        box-sizing: border-box;
+      }
+    </style>
+    <script>
+      // iOS Safari doesn't shrink the page for the on-screen keyboard, it
+      // covers it. Fit the app to what's actually visible above the
+      // keyboard, so the message box sits right on top of it.
+      (function () {
+        var vv = window.visualViewport;
+        if (!vv) return;
+        function fit() {
+          document.documentElement.style.setProperty('--app-height', vv.height + 'px');
+          window.scrollTo(0, 0);
+        }
+        vv.addEventListener('resize', fit);
+        vv.addEventListener('scroll', fit);
+        fit();
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.web.tsx"></script>
+  </body>
+</html>

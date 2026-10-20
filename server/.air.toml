@@ -1,0 +1,15 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/supermatrix-server ./cmd/supermatrix-server"
+  bin = "./tmp/supermatrix-server"
+  include_ext = ["go", "sql"]
+  exclude_dir = ["tmp", "vendor"]
+  delay = 200
+
+[log]
+  time = false
+
+[misc]
+  clean_on_exit = true

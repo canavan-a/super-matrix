@@ -1,0 +1,94 @@
+{
+  "themes": {
+    "dark": {
+      "bg": "#0d1117",
+      "accent": "#78adfa",
+      "ramp": [
+        "#0d1117",
+        "#161b22",
+        "#50575f",
+        "#8b949e",
+        "#e6edf3"
+      ],
+      "iconTones": [
+        {
+          "u": 4,
+          "w": 0.5,
+          "color": "#afcdf6"
+        }
+      ]
+    },
+    "ember": {
+      "bg": "#050403",
+      "accent": "#b37c6e",
+      "ramp": [
+        "#050403",
+        "#0c0908",
+        "#48352f",
+        "#8a6c5f",
+        "#e8d9d0"
+      ],
+      "iconTones": [
+        {
+          "u": 4,
+          "w": 0.5,
+          "color": "#cdab9f"
+        }
+      ]
+    },
+    "light": {
+      "bg": "#ffffff",
+      "accent": "#0969da",
+      "ramp": [
+        "#ffffff",
+        "#f6f8fa",
+        "#a3a8ad",
+        "#57606a",
+        "#1b1f24"
+      ],
+      "iconTones": [
+        {
+          "u": 4,
+          "w": 0.5,
+          "color": "#12447f"
+        }
+      ]
+    },
+    "sepia": {
+      "bg": "#f4ecd8",
+      "accent": "#a0651b",
+      "ramp": [
+        "#f4ecd8",
+        "#ece0c6",
+        "#b1a58c",
+        "#7a6a4d",
+        "#3b2f1e"
+      ],
+      "iconTones": [
+        {
+          "u": 4,
+          "w": 0.5,
+          "color": "#6e4a1d"
+        }
+      ]
+    },
+    "slate": {
+      "bg": "#1e2530",
+      "accent": "#94c7ef",
+      "ramp": [
+        "#1e2530",
+        "#262e3b",
+        "#5a6677",
+        "#93a0b3",
+        "#dde3ea"
+      ],
+      "iconTones": [
+        {
+          "u": 4,
+          "w": 0.5,
+          "color": "#b8d5ec"
+        }
+      ]
+    }
+  }
+}

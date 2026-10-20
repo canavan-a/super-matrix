@@ -1,0 +1,28 @@
+<!-- The sideloaded build (release/release.sh, not Google Play): merged over
+     src/main/AndroidManifest.xml. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- The in-app updater (UpdateInstaller.kt) installs the APK it downloads. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application>
+      <!-- An update download finishing, even with the app closed (UpdateInstaller.kt). -->
+      <receiver android:name=".UpdateDownloadReceiver" android:exported="true">
+        <intent-filter>
+          <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+        </intent-filter>
+      </receiver>
+
+      <!-- Serves the downloaded APK to the system package installer. -->
+      <provider
+        android:name="androidx.core.content.FileProvider"
+        android:authorities="${applicationId}.updateprovider"
+        android:exported="false"
+        android:grantUriPermissions="true">
+        <meta-data
+          android:name="android.support.FILE_PROVIDER_PATHS"
+          android:resource="@xml/file_paths" />
+      </provider>
+    </application>
+</manifest>

@@ -1,0 +1,16 @@
+.git
+.data
+.env
+**/node_modules
+app/dist
+app/android
+app/__tests__
+art
+docs
+nix
+release
+tools
+server/tmp
+server/*.db
+*.apk
+*.aab

@@ -1,0 +1,178 @@
+# Super Matrix server on k3s (bundled Traefik), laid out like
+# ../kubernetes-deployment's pangolin.yaml.
+#
+# Traefik passes TLS straight through by SNI (IngressRouteTCP), so the pod
+# terminates TLS and gets one Let's Encrypt cert per host itself. Port 80
+# reaches it through a plain Ingress, for HTTP-01 challenges and redirects.
+# QUIC (UDP 443) bypasses Traefik on a hostPort; open 443/udp in the EC2
+# security group too. Without it relays fall back to the WebSocket.
+#
+# Replace matrix.example.com (the admin host) and example.com (the deployment
+# domain) below. Every domain added in the app also needs its HostSNI() and
+# port-80 rule here, or Traefik won't send its traffic to this pod.
+#
+# One-time secret (the root password, your app login):
+#   kubectl create secret generic supermatrix-root-password \
+#     --from-literal=password="$(openssl rand -base64 24)" -n acanavan-namespace
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: supermatrix
+  namespace: acanavan-namespace
+spec:
+  serviceName: "supermatrix"
+  replicas: 1 # sqlite + on-disk certs, do not scale this up
+  selector:
+    matchLabels:
+      app: supermatrix
+  template:
+    metadata:
+      labels:
+        app: supermatrix
+    spec:
+      securityContext:
+        fsGroup: 65532 # the image's non-root user; lets it write the volume
+      containers:
+        - name: supermatrix
+          image: 766216391680.dkr.ecr.us-east-2.amazonaws.com/super-matrix:latest
+          imagePullPolicy: Always
+          env:
+            - name: SUPERMATRIX_ADMIN_HOST
+              value: "matrix.example.com"
+            # Optional: seeds *.example.com as the first domain. After that,
+            # domains are managed in the app.
+            - name: SUPERMATRIX_BASE_DOMAIN
+              value: "example.com"
+            - name: SUPERMATRIX_ACME_EMAIL
+              value: "aidan.canavan3@gmail.com"
+            # Uncomment for the first run, then remove (and delete
+            # /data/certs) once certs come through.
+            # - name: SUPERMATRIX_ACME_DIRECTORY
+            #   value: "staging"
+            - name: SUPERMATRIX_ROOT_PASSWORD_FILE
+              value: /run/secrets/root-password
+            # The container listens for QUIC on 8443; relays dial the
+            # hostPort below.
+            - name: SUPERMATRIX_QUIC_PUBLIC
+              value: "matrix.example.com:443"
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: https
+              containerPort: 8443
+            - name: quic
+              containerPort: 8443
+              protocol: UDP
+              hostPort: 443
+          readinessProbe:
+            tcpSocket:
+              port: 8443
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          volumeMounts:
+            - name: supermatrix-data
+              mountPath: /data
+            - name: supermatrix-root-password
+              mountPath: /run/secrets/root-password
+              subPath: password
+              readOnly: true
+      imagePullSecrets:
+        - name: ecr-creds
+      volumes:
+        - name: supermatrix-root-password
+          secret:
+            secretName: supermatrix-root-password
+  volumeClaimTemplates:
+    - metadata:
+        name: supermatrix-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supermatrix-service
+  namespace: acanavan-namespace
+spec:
+  selector:
+    app: supermatrix
+  ports:
+    - name: https
+      protocol: TCP
+      port: 443
+      targetPort: 8443
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+---
+# FIREWALL SECTION
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: supermatrix-network-policy
+  namespace: acanavan-namespace
+spec:
+  podSelector:
+    matchLabels:
+      app: supermatrix
+  policyTypes:
+    - Ingress
+  ingress:
+    - {}
+---
+# TLS passthrough by SNI: the admin host and every deployment host.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: supermatrix-passthrough
+  namespace: acanavan-namespace
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: >-
+        HostSNI(`matrix.example.com`) ||
+        HostSNIRegexp(`^[a-z0-9-]+\.example\.com$`)
+      services:
+        - name: supermatrix-service
+          port: 443
+  tls:
+    passthrough: true
+---
+# Port 80: HTTP-01 challenges and http -> https redirects. Scoped to the web
+# entrypoint so Traefik doesn't also make an HTTPS router that would fight
+# the passthrough above.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: supermatrix-ingress
+  namespace: acanavan-namespace
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+    - host: matrix.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: supermatrix-service
+                port:
+                  number: 80
+    - host: "*.example.com"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: supermatrix-service
+                port:
+                  number: 80

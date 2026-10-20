@@ -1,0 +1,13 @@
+diff --git a/node_modules/@notifee/react-native/dist/validators/validateNotification.js b/node_modules/@notifee/react-native/dist/validators/validateNotification.js
+index 301c94c..93e8f4c 100644
+--- a/node_modules/@notifee/react-native/dist/validators/validateNotification.js
++++ b/node_modules/@notifee/react-native/dist/validators/validateNotification.js
+@@ -104,7 +104,7 @@ function validateNotification(notification) {
+         const entries = Object.entries(notification.data);
+         for (let i = 0; i < entries.length; i++) {
+             const [key, value] = entries[i];
+-            if (!(0, utils_1.isString)(value) && !(0, utils_1.isNumber)(value) && !(0, utils_1.isObject)(value)) {
++            if (!(0, utils_1.isString)(value) && !(0, utils_1.isNumber)(value) && !(0, utils_1.isObject)(value) && !(0, utils_1.isBoolean)(value)) {
+                 throw new Error(`'notification.data' value for key "${key}" is invalid, expected a string value.`);
+             }
+         }
