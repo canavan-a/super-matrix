@@ -117,16 +117,16 @@ describe('logo data', () => {
     expect(LOGO.dots.tones).toHaveLength(0);
   });
 
-  it('uses the whole broom tile for the icon: six bright squares on a 3x3 grid', () => {
-    expect(LOGO.icon.w).toBe(68);
-    expect(LOGO.icon.h).toBe(51);
-    // The squares are the bright tone; each is 12 sub-pixels wide, 9 rows tall.
-    const bright = LOGO.icon.tones.filter(t => t.u >= 3);
-    const runs = bright.flatMap(t => Array.from({length: t.runs.length / 3}, (_, k) => t.runs.slice(k * 3, k * 3 + 3)));
+  it('draws the broom as its six squares alone, with no tile behind them, on a 3x3 grid', () => {
+    expect(LOGO.icon.w).toBe(52);
+    expect(LOGO.icon.h).toBe(39);
+    // Only the bright squares; each is 12 sub-pixels wide, 9 rows tall.
+    expect(LOGO.icon.tones.every(t => t.u >= 3)).toBe(true);
+    const runs = LOGO.icon.tones.flatMap(t => Array.from({length: t.runs.length / 3}, (_, k) => t.runs.slice(k * 3, k * 3 + 3)));
     expect(runs.every(([, , len]) => len === 12)).toBe(true);
     // 9 rows per square row, 2 squares per row of squares, 3 rows of squares.
     expect(runs).toHaveLength(9 * 2 * 3);
-    const cells = new Set(runs.map(([x, y]) => `${Math.floor((y - 6) / 15)},${Math.floor((x - 8) / 20)}`));
+    const cells = new Set(runs.map(([x, y]) => `${Math.floor(y / 15)},${Math.floor(x / 20)}`));
     expect([...cells].sort()).toEqual(['0,0', '0,1', '1,0', '1,2', '2,1', '2,2']);
   });
 });

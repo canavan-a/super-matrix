@@ -163,7 +163,7 @@ export function LogoLine({height}: {height: number}): React.JSX.Element {
   );
 }
 
-/** The broom mark (broomledger's logo, as in art/mark.txt) on its tile, in the theme's colors. Sized by height; it's square. */
+/** The broom mark (broomledger's logo, as in art/mark.txt): its squares alone, in the theme's colors. Sized by height. */
 export function MarkArt({height}: {height: number}): React.JSX.Element {
   const theme = useTheme();
   const viewW = LOGO.icon.w * PIXEL_W;

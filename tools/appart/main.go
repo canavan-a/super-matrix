@@ -44,7 +44,8 @@ type Tone struct{ U, W float64 }
 
 // The art files' legend. A–I are the wordmark's tones, graded letter by
 // letter left to right exactly as super-badger's are; 1–3 are fills (the
-// broom's tile); o marks animated dots (unused by the broom).
+// broom's tile, which it no longer has); o marks animated dots (unused by
+// the broom).
 var legend = map[byte]Tone{
 	'A': {4, 1}, 'B': {3.8333, 0.5}, 'C': {4, 0.5}, 'D': {3.6667, 0.5}, 'E': {3.5, 0.5},
 	'F': {3.3333, 0.5}, 'G': {3.3333, 0}, 'H': {3.1667, 0}, 'I': {3, 0},

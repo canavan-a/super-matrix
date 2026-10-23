@@ -49,7 +49,7 @@ export function LoginScreen(): React.JSX.Element {
     <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <View style={styles.brand}>
-          <MarkArt height={64} />
+          <MarkArt height={48} />
           <View style={styles.gap} />
           <LogoArt height={92} />
         </View>
