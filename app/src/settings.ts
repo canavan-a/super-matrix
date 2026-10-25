@@ -9,6 +9,8 @@ export interface Settings {
   servers: string[];
   // The one the app is showing; null on the sign-in screen.
   activeServer: string | null;
+  // Aliases for servers, admin URL → name; only on this device.
+  serverNames: Record<string, string>;
   // See src/theme.tsx for the palettes.
   themeName: 'light' | 'dark' | 'slate' | 'sepia' | 'ember';
   // Android-only: switch the launcher icon to the one matching the current
@@ -26,6 +28,7 @@ export interface Settings {
 const DEFAULT_SETTINGS: Settings = {
   servers: [],
   activeServer: null,
+  serverNames: {},
   themeName: 'dark',
   themedIcon: true,
   launchSplash: true,
@@ -79,6 +82,17 @@ export const settingsStore = {
     return () => listeners.delete(listener);
   },
 };
+
+/** A server's alias, or its address without the scheme. */
+export function serverLabel(url: string): string {
+  return current.serverNames[url] || url.replace(/^https?:\/\//, '');
+}
+
+/** Names a server on this device; an empty name clears the alias. */
+export async function setServerName(url: string, name: string): Promise<void> {
+  const {[url]: _, ...rest} = current.serverNames;
+  await update({serverNames: name.trim() ? {...rest, [url]: name.trim()} : rest});
+}
 
 export function normalizeServer(url: string): string {
   let u = url.trim().replace(/\/+$/, '');

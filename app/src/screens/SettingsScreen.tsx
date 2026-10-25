@@ -4,9 +4,9 @@ import {Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View} from 're
 import {compareVersions, DowngradeBlockedError, fetchReleases, getVersionInfo, onDownloadProgress, Release, runUpdate} from '../appUpdater';
 import {isSideload} from '../distribution';
 import {InstallCard} from '../components/InstallCard';
-import {Button, Divider, Hint, Label, Title, ToggleRow} from '../components/ui';
+import {Button, Divider, Hint, Input, Label, Title, ToggleRow} from '../components/ui';
 import {platformConfirm} from '../platformConfirm';
-import {settingsStore} from '../settings';
+import {serverLabel, setServerName, settingsStore} from '../settings';
 import {forgetServer, hasSession, showSignIn, signOut, switchServer, useStore} from '../store';
 import {THEME_OPTIONS, Theme, useThemeSetting} from '../theme';
 
@@ -92,6 +92,9 @@ export function SettingsScreen(): React.JSX.Element {
   };
 
   const others = s.servers.filter(u => u !== server);
+  const alias = server ? s.serverNames[server] ?? '' : '';
+  const [name, setName] = useState(alias);
+  useEffect(() => setName(alias), [alias]);
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
@@ -117,14 +120,38 @@ export function SettingsScreen(): React.JSX.Element {
         <Button label="Add a server" kind="secondary" icon="plus" onPress={showSignIn} />
       </View>
 
+      <Label spaced>Name on this device</Label>
+      <View style={styles.nameRow}>
+        <Input
+          style={styles.flex}
+          value={name}
+          onChangeText={setName}
+          placeholder="e.g. Home, Work"
+          onSubmitEditing={() => server && setServerName(server, name)}
+        />
+        <Button
+          label="Save"
+          kind="secondary"
+          disabled={!server || name.trim() === alias}
+          onPress={() => server && setServerName(server, name)}
+        />
+      </View>
+
       {others.length > 0 && (
         <>
           <Label spaced>Other servers</Label>
           {others.map(url => (
             <View key={url} style={styles.serverRow}>
-              <Text style={styles.serverUrl} numberOfLines={1}>
-                {url.replace(/^https?:\/\//, '')}
-              </Text>
+              <View style={styles.flex}>
+                <Text style={styles.serverUrl} numberOfLines={1}>
+                  {serverLabel(url)}
+                </Text>
+                {s.serverNames[url] ? (
+                  <Text style={styles.serverSub} numberOfLines={1}>
+                    {url.replace(/^https?:\/\//, '')}
+                  </Text>
+                ) : null}
+              </View>
               <Pressable style={styles.small} onPress={() => switchServer(url)}>
                 <Text style={styles.smallText}>{hasSession(url) ? 'Open' : 'Sign in'}</Text>
               </Pressable>
@@ -238,7 +265,10 @@ function makeStyles(theme: Theme) {
       borderBottomWidth: 1,
       borderBottomColor: theme.border,
     },
-    serverUrl: {flex: 1, fontSize: 14, fontWeight: '600', color: theme.text},
+    serverUrl: {fontSize: 14, fontWeight: '600', color: theme.text},
+    serverSub: {fontSize: 12, color: theme.textMuted, marginTop: 2},
+    nameRow: {flexDirection: 'row', alignItems: 'center', gap: 8},
+    flex: {flex: 1},
     small: {paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, backgroundColor: theme.surfaceAlt},
     smallText: {fontWeight: '600', fontSize: 13, color: theme.text},
     themeRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 8},

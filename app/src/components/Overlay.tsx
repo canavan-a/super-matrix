@@ -4,10 +4,9 @@ import {BackHandler, Pressable, StyleSheet, View, ViewStyle} from 'react-native'
 import {Portal} from './Portal';
 
 /**
- * A modal layer drawn inside the app's own window. React Native's <Modal>
- * opens a separate Android window that doesn't inherit MainActivity's
- * FLAG_SECURE, so anything shown in one could be screenshotted. Every sheet
- * or viewer that can show message content uses this instead.
+ * A modal layer drawn inside the app's own window (React Native's <Modal>
+ * opens a separate Android window), so sheets share the app's back handling
+ * and stacking.
  */
 export function Overlay({
   visible,

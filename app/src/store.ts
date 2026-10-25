@@ -28,6 +28,8 @@ interface State {
   error: string | null;
   /** a sign-in that ended (expired, password changed), shown on the sign-in screen */
   signedOutReason: string | null;
+  /** the server "Add a server" left, for the sign-in screen's back arrow */
+  returnTo: string | null;
 }
 
 const initial: State = {
@@ -43,6 +45,7 @@ const initial: State = {
   connected: false,
   error: null,
   signedOutReason: null,
+  returnTo: null,
 };
 
 let state: State = initial;
@@ -122,8 +125,17 @@ export async function switchServer(server: string): Promise<void> {
 
 /** The sign-in screen for another server; saved sessions stay. */
 export function showSignIn(): void {
+  const from = state.phase === 'ready' ? state.server : null;
   disconnect();
-  set({...initial, phase: 'signedOut', server: null});
+  set({...initial, phase: 'signedOut', server: null, returnTo: from});
+}
+
+/** Back from "Add a server" to the server it was opened from. */
+export function cancelSignIn(): boolean {
+  const {returnTo} = state;
+  if (!returnTo || !sessions[returnTo]) return false;
+  switchServer(returnTo).catch(() => {});
+  return true;
 }
 
 /** Ends the session on this device (and on the server, if it answers). */
@@ -147,8 +159,10 @@ export async function forgetServer(server: string): Promise<void> {
   sessions = rest;
   await saveSessions(sessions);
   const s = settingsStore.get();
+  const {[server]: __, ...serverNames} = s.serverNames;
   await settingsStore.update({
     servers: s.servers.filter(x => x !== server),
+    serverNames,
     activeServer: s.activeServer === server ? null : s.activeServer,
   });
   if (state.server === server) set({server: settingsStore.get().servers[0] ?? null});

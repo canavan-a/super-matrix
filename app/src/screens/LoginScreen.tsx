@@ -1,12 +1,13 @@
 import React, {useEffect, useState} from 'react';
-import {KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
+import {BackHandler, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
 import {api} from '../api';
+import {Icon} from '../components/Icon';
 import {Notice} from '../components/Notice';
 import {Button, Input, Label} from '../components/ui';
 import {LogoArt, MarkArt} from '../logo/LogoArt';
-import {settingsStore} from '../settings';
-import {hasSession, signIn, switchServer, useStore} from '../store';
+import {serverLabel, settingsStore} from '../settings';
+import {cancelSignIn, hasSession, signIn, switchServer, useStore} from '../store';
 import {Theme, useTheme} from '../theme';
 
 /** The web app is usually served by the server itself: offer its origin. */
@@ -25,6 +26,16 @@ export function LoginScreen(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const saved = settingsStore.get().servers;
+  // Came here from "Add a server": back returns to that server.
+  const returnTo = useStore(s => s.returnTo);
+  const canGoBack = !!returnTo && hasSession(returnTo);
+
+  // Android back does the same; with nowhere to go it leaves the app.
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !canGoBack) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', cancelSignIn);
+    return () => sub.remove();
+  }, [canGoBack]);
 
   useEffect(() => {
     if (server) return;
@@ -47,6 +58,14 @@ export function LoginScreen(): React.JSX.Element {
 
   return (
     <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      {canGoBack && (
+        <Pressable style={styles.back} onPress={cancelSignIn} accessibilityLabel="Back" hitSlop={8}>
+          <Icon name="chevron-left" size={22} color={theme.text} />
+          <Text style={styles.backText} numberOfLines={1}>
+            {serverLabel(returnTo!)}
+          </Text>
+        </Pressable>
+      )}
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <View style={styles.brand}>
           <MarkArt height={48} />
@@ -73,7 +92,7 @@ export function LoginScreen(): React.JSX.Element {
                 style={[styles.savedChip, url === server && styles.savedChipOn]}
                 onPress={() => (hasSession(url) ? switchServer(url) : setServer(url))}>
                 <Text style={[styles.savedText, url === server && styles.savedTextOn]} numberOfLines={1}>
-                  {url.replace(/^https?:\/\//, '')}
+                  {serverLabel(url)}
                 </Text>
               </Pressable>
             ))}
@@ -108,6 +127,8 @@ export function LoginScreen(): React.JSX.Element {
 function makeStyles(theme: Theme) {
   return StyleSheet.create({
     fill: {flex: 1, backgroundColor: theme.bg},
+    back: {flexDirection: 'row', alignItems: 'center', gap: 2, alignSelf: 'flex-start', padding: 12, maxWidth: '100%'},
+    backText: {fontSize: 14, fontWeight: '600', color: theme.text, flexShrink: 1},
     container: {padding: 24, paddingTop: 48, maxWidth: 420, width: '100%', alignSelf: 'center'},
     brand: {alignItems: 'center', marginBottom: 20},
     gap: {height: 18},

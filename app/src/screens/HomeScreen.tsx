@@ -1,8 +1,9 @@
-import React, {useState} from 'react';
-import {ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View} from 'react-native';
+import React, {useRef} from 'react';
+import {ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
 import {AuthMode, Deployment, RelayState} from '../api';
 import {Icon, IconName} from '../components/Icon';
+import {SpringyPull} from '../components/SpringyPull';
 import {Button, Dot} from '../components/ui';
 import {isFallback, transportBadge} from '../link';
 import {Route} from '../routes';
@@ -46,13 +47,7 @@ export function HomeScreen({onNavigate}: {onNavigate: (r: Route) => void}): Reac
   const live = useStore(s => s.live);
   const tls = useStore(s => s.info?.tls ?? true);
   const info = useStore(s => s.info);
-  const [pulling, setPulling] = useState(false);
-
-  const pull = async () => {
-    setPulling(true);
-    await refresh().catch(() => {});
-    setPulling(false);
-  };
+  const scrollY = useRef(0);
 
   if (!loaded) {
     return (
@@ -65,58 +60,61 @@ export function HomeScreen({onNavigate}: {onNavigate: (r: Route) => void}): Reac
   const relayName = (id: string) => relays.find(r => r.id === id)?.name ?? 'unknown relay';
 
   return (
-    <ScrollView
-      style={styles.fill}
-      contentContainerStyle={styles.container}
-      refreshControl={<RefreshControl refreshing={pulling} onRefresh={pull} tintColor={theme.textMuted} />}>
-      {relays.length === 0 ? (
-        <View style={styles.empty}>
-          <Icon name="server" size={28} color={theme.textMuted} />
-          <Text style={styles.emptyTitle}>Add your first relay</Text>
-          <Text style={styles.emptyText}>
-            A relay runs on the machine next to what you want to expose. It dials out to this server, so it needs no open ports.
-          </Text>
-          <Button label="Add a relay" icon="plus" onPress={() => onNavigate({name: 'relays'})} style={styles.emptyButton} />
-        </View>
-      ) : deployments.length === 0 ? (
-        <View style={styles.empty}>
-          <Icon name="globe" size={28} color={theme.textMuted} />
-          <Text style={styles.emptyTitle}>Nothing exposed yet</Text>
-          <Text style={styles.emptyText}>
-            A deployment puts a service a relay can reach (like http://127.0.0.1:8080) at its own hostname, with its own certificate and
-            sign-in in front.
-          </Text>
-          <Button
-            label="New deployment"
-            icon="plus"
-            onPress={() => onNavigate({name: 'deployment', id: null})}
-            style={styles.emptyButton}
-          />
-        </View>
-      ) : (
-        <>
-          {deployments.map(d => (
-            <DeploymentRow
-              key={d.id}
-              d={d}
-              relay={relayName(d.relayId)}
-              health={deploymentHealth(d, live)}
-              link={live[d.relayId]}
-              fallback={isFallback(info, live[d.relayId])}
-              tls={tls}
-              onPress={() => onNavigate({name: 'deployment', id: d.id})}
+    <SpringyPull atTop={() => scrollY.current <= 0} onRefresh={refresh}>
+      <ScrollView
+        style={styles.fill}
+        contentContainerStyle={styles.container}
+        onScroll={e => (scrollY.current = e.nativeEvent.contentOffset.y)}
+        scrollEventThrottle={16}>
+        {relays.length === 0 ? (
+          <View style={styles.empty}>
+            <Icon name="server" size={28} color={theme.textMuted} />
+            <Text style={styles.emptyTitle}>Add your first relay</Text>
+            <Text style={styles.emptyText}>
+              A relay runs on the machine next to what you want to expose. It dials out to this server, so it needs no open ports.
+            </Text>
+            <Button label="Add a relay" icon="plus" onPress={() => onNavigate({name: 'relays'})} style={styles.emptyButton} />
+          </View>
+        ) : deployments.length === 0 ? (
+          <View style={styles.empty}>
+            <Icon name="globe" size={28} color={theme.textMuted} />
+            <Text style={styles.emptyTitle}>Nothing exposed yet</Text>
+            <Text style={styles.emptyText}>
+              A deployment puts a service a relay can reach (like http://127.0.0.1:8080) at its own hostname, with its own certificate and
+              sign-in in front.
+            </Text>
+            <Button
+              label="New deployment"
+              icon="plus"
+              onPress={() => onNavigate({name: 'deployment', id: null})}
+              style={styles.emptyButton}
             />
-          ))}
-          <Button
-            label="New deployment"
-            icon="plus"
-            kind="secondary"
-            onPress={() => onNavigate({name: 'deployment', id: null})}
-            style={styles.newButton}
-          />
-        </>
-      )}
-    </ScrollView>
+          </View>
+        ) : (
+          <>
+            {deployments.map(d => (
+              <DeploymentRow
+                key={d.id}
+                d={d}
+                relay={relayName(d.relayId)}
+                health={deploymentHealth(d, live)}
+                link={live[d.relayId]}
+                fallback={isFallback(info, live[d.relayId])}
+                tls={tls}
+                onPress={() => onNavigate({name: 'deployment', id: d.id})}
+              />
+            ))}
+            <Button
+              label="New deployment"
+              icon="plus"
+              kind="secondary"
+              onPress={() => onNavigate({name: 'deployment', id: null})}
+              style={styles.newButton}
+            />
+          </>
+        )}
+      </ScrollView>
+    </SpringyPull>
   );
 }
 

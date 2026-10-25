@@ -25,11 +25,9 @@ E2E=1 npx jest __tests__/e2e.test.ts --forceExit   # builds and runs the real se
 
 ## Security notes
 
-- `MainActivity.kt` sets `FLAG_SECURE` (no screenshots, screen recording or
-  recents thumbnail): the app shows relay and API tokens. React Native's
-  `<Modal>` opens its own window without that flag, so sheets go through
-  `components/Overlay.tsx` instead.
-- Tokens are shown once, when made; the server keeps only hashes.
+- Screenshots are allowed (no `FLAG_SECURE`). Relay and API tokens are
+  shown once, when made, so a screenshot of one is only as exposed as the
+  token itself; the server keeps only hashes.
 
 # Launch splash and icons
 

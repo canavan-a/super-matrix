@@ -26,6 +26,7 @@ import {splashHold} from './logo/splashHold';
 import {navTarget, pendingNav, SETTINGS_NAV} from './notifications/pendingNav';
 import {setThemeColor, startPwa} from './pwa/pwa';
 import {Route} from './routes';
+import {serverLabel} from './settings';
 import {DeploymentScreen} from './screens/DeploymentScreen';
 import {HomeScreen} from './screens/HomeScreen';
 import {LoginScreen} from './screens/LoginScreen';
@@ -192,7 +193,7 @@ function AppInner(): React.JSX.Element {
           )}
           {route.name === 'home' && server ? (
             <Text style={styles.headerSubtitle} numberOfLines={1}>
-              {server.replace(/^https?:\/\//, '')}
+              {serverLabel(server)}
             </Text>
           ) : null}
         </View>

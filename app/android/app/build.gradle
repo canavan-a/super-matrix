@@ -87,10 +87,6 @@ android {
         // build; a plain debug/dev build falls back to these placeholders.
         versionCode project.hasProperty("versionCode") ? project.getProperty("versionCode").toInteger() : 1
         versionName project.hasProperty("versionName") ? project.getProperty("versionName") : "0.0.0"
-        // -PallowScreenshots=true builds a copy without the screenshot block
-        // (FLAG_SECURE, MainActivity.kt), for screenshots only. Never
-        // for a release.
-        buildConfigField "boolean", "ALLOW_SCREENSHOTS", project.hasProperty("allowScreenshots") && project.getProperty("allowScreenshots") == "true" ? "true" : "false"
     }
     // One build flavor, kept as a dimension so the task names
     // (assembleSideloadRelease) and the Distribution module match the other
