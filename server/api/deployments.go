@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"main/database"
+	"main/edge"
 	"main/registry"
 )
 
@@ -19,6 +20,7 @@ type tokenDTO struct {
 	Name       string     `json:"name"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	LastUsedAt *time.Time `json:"lastUsedAt"`
+	ExpiresAt  *time.Time `json:"expiresAt"`
 }
 
 type deploymentDTO struct {
@@ -41,6 +43,7 @@ type deploymentDTO struct {
 	SessionTTLS      int        `json:"sessionTtlS"`
 	BasicUser        string     `json:"basicUser"`
 	HasBasicPassword bool       `json:"hasBasicPassword"`
+	OTPEmails        []string   `json:"otpEmails"`
 	IPAllowlist      []string   `json:"ipAllowlist"`
 	CertStatus       string     `json:"certStatus"`
 	CertExpiresAt    *time.Time `json:"certExpiresAt"`
@@ -64,11 +67,11 @@ func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []databa
 		TLSSkipVerify: d.TLSSkipVerify, SNI: d.SNI, PreserveHost: d.PreserveHost, Enabled: d.Enabled,
 		AuthMode: d.AuthMode, HasLoginPassword: d.LoginPassHash != "", AllowRootLogin: d.AllowRootLogin,
 		SessionTTLS: d.SessionTTLS, BasicUser: d.BasicUser, HasBasicPassword: d.BasicPassHash != "",
-		IPAllowlist: splitAllowlist(d.IPAllowlist), CertStatus: d.CertStatus, CertExpiresAt: d.CertExpiresAt,
+		OTPEmails: splitAllowlist(d.OTPEmails), IPAllowlist: splitAllowlist(d.IPAllowlist), CertStatus: d.CertStatus, CertExpiresAt: d.CertExpiresAt,
 		CertError: d.CertError, Tokens: []tokenDTO{}, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
 	}
 	for _, t := range toks {
-		out.Tokens = append(out.Tokens, tokenDTO{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt})
+		out.Tokens = append(out.Tokens, tokenDTO{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt, ExpiresAt: t.ExpiresAt})
 	}
 	return out
 }
@@ -152,6 +155,7 @@ type deploymentInput struct {
 	SessionTTLS    *int      `json:"sessionTtlS"`
 	BasicUser      *string   `json:"basicUser"`
 	BasicPassword  *string   `json:"basicPassword"`
+	OTPEmails      *[]string `json:"otpEmails"`
 	IPAllowlist    *[]string `json:"ipAllowlist"`
 }
 
@@ -234,6 +238,27 @@ func (a *API) apply(d *database.Deployment, in deploymentInput) error {
 			return err
 		}
 	}
+	if in.OTPEmails != nil {
+		seen := map[string]bool{}
+		var list []string
+		for _, raw := range *in.OTPEmails {
+			if strings.TrimSpace(raw) == "" {
+				continue
+			}
+			m := edge.NormalizeEmail(raw)
+			if m == "" {
+				return inputError("email list: " + strings.TrimSpace(raw) + " isn't an email address")
+			}
+			if !seen[m] {
+				seen[m] = true
+				list = append(list, m)
+			}
+		}
+		if len(list) > 1000 {
+			return inputError("email list: at most 1000 addresses")
+		}
+		d.OTPEmails = strings.Join(list, "\n")
+	}
 	if in.IPAllowlist != nil {
 		joined := strings.Join(*in.IPAllowlist, "\n")
 		nets, err := registry.ParseAllowlist(joined)
@@ -277,6 +302,10 @@ func (a *API) apply(d *database.Deployment, in deploymentInput) error {
 	}
 	switch d.AuthMode {
 	case database.AuthNone, database.AuthToken:
+	case database.AuthOTP:
+		if d.OTPEmails == "" {
+			return inputError("email codes need at least one address on the list")
+		}
 	case database.AuthLogin:
 		if d.LoginPassHash == "" && !d.AllowRootLogin {
 			return inputError("login needs a password, or the root password allowed")
@@ -289,7 +318,7 @@ func (a *API) apply(d *database.Deployment, in deploymentInput) error {
 			return inputError("basic auth usernames can't contain ':'")
 		}
 	default:
-		return inputError("auth mode must be none, login, basic or token")
+		return inputError("auth mode must be none, login, otp, basic or token")
 	}
 	r, err := database.First[database.Relay](a.db.Where("id = ?", d.RelayID))
 	if err != nil {
@@ -382,26 +411,38 @@ func (a *API) deleteDeployment(c *gin.Context) {
 }
 
 // createToken adds an API token to a deployment; it's shown only here.
+// expiresInS (seconds from now) makes it stop working then; 0 or missing
+// never expires.
 func (a *API) createToken(c *gin.Context) {
 	d := a.findDeployment(c)
 	if d == nil {
 		return
 	}
 	var b struct {
-		Name string `json:"name"`
+		Name       string `json:"name"`
+		ExpiresInS int64  `json:"expiresInS"`
 	}
 	if err := c.ShouldBindJSON(&b); err != nil || cleanName(b.Name) == "" {
 		abort(c, http.StatusBadRequest, "name required")
 		return
 	}
+	if b.ExpiresInS != 0 && (b.ExpiresInS < 300 || b.ExpiresInS > 5*365*24*3600) {
+		abort(c, http.StatusBadRequest, "token expiry must be between 5 minutes and 5 years, or never")
+		return
+	}
+	now := a.now()
 	tok := database.NewSecret("smt")
-	t := database.DeploymentToken{ID: database.NewID(), DeploymentID: d.ID, Name: cleanName(b.Name), TokenHash: database.HashSecret(tok), CreatedAt: a.now()}
+	t := database.DeploymentToken{ID: database.NewID(), DeploymentID: d.ID, Name: cleanName(b.Name), TokenHash: database.HashSecret(tok), CreatedAt: now}
+	if b.ExpiresInS > 0 {
+		exp := now.Add(time.Duration(b.ExpiresInS) * time.Second)
+		t.ExpiresAt = &exp
+	}
 	if err := a.db.Create(&t).Error; err != nil {
 		abort(c, http.StatusInternalServerError, "server error")
 		return
 	}
 	a.changed()
-	c.JSON(http.StatusCreated, gin.H{"id": t.ID, "name": t.Name, "token": tok, "createdAt": t.CreatedAt})
+	c.JSON(http.StatusCreated, gin.H{"id": t.ID, "name": t.Name, "token": tok, "createdAt": t.CreatedAt, "expiresAt": t.ExpiresAt})
 }
 
 func (a *API) deleteToken(c *gin.Context) {

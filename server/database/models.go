@@ -32,6 +32,8 @@ const (
 	AuthLogin = "login"
 	AuthBasic = "basic"
 	AuthToken = "token"
+	// AuthOTP emails a one-time code to addresses on the deployment's list.
+	AuthOTP = "otp"
 )
 
 // Cert statuses.
@@ -64,6 +66,9 @@ type Deployment struct {
 	SessionTTLS    int `gorm:"column:session_ttl_s"`
 	BasicUser      string
 	BasicPassHash  string
+	// OTPEmails is the newline-separated, lowercased addresses that can get
+	// a sign-in code in otp mode.
+	OTPEmails string `gorm:"column:otp_emails"`
 	// IPAllowlist is newline-separated CIDRs; empty allows everyone.
 	IPAllowlist   string `gorm:"column:ip_allowlist"`
 	CertStatus    string
@@ -80,6 +85,8 @@ type DeploymentToken struct {
 	TokenHash    string
 	CreatedAt    time.Time
 	LastUsedAt   *time.Time
+	// ExpiresAt is when the token stops working; nil never.
+	ExpiresAt *time.Time
 }
 
 type AdminSession struct {

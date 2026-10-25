@@ -19,8 +19,9 @@ wherever the services run. No open ports at home, no third party in the path.
   and each deployment gets its own Let's Encrypt certificate on first use. No
   wildcard certificate, no DNS API keys.
 - **Auth in front, per deployment:** a Super Matrix sign-in page (its own
-  password, the root password, or both), HTTP basic auth, API tokens
-  (`Authorization: Bearer`), or public. An IP allow list works with any of
+  password, the root password, or both), email codes for a list of addresses,
+  HTTP basic auth, API tokens (`Authorization: Bearer`, optionally expiring),
+  or public. An IP allow list works with any of
   them. Credentials are checked and stripped at the server; the service never
   sees them.
 - **One root password** manages everything, from the app on Android or the web
@@ -101,6 +102,7 @@ services.supermatrix = {
   adminHost = "matrix.example.com";
   baseDomain = "example.com";
   rootPasswordFile = "/etc/supermatrix/root-password";  # a runtime path, not a Nix path
+  # environmentFile = "/etc/supermatrix/env";  # SUPERMATRIX_SMTP_* for email codes
   acmeEmail = "you@example.com";
   # acmeStaging = true;  # while testing
   # quic.enable = false;  # relays then always use the WebSocket

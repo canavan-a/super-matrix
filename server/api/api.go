@@ -167,6 +167,8 @@ func (a *API) info(c *gin.Context) {
 		"version":   version.Version,
 		"serverUrl": a.publicURL(c, a.cfg.AdminHost),
 		"quic":      a.quic.Load(),
+		// smtp: email-code sign-in can send codes.
+		"smtp": a.cfg.SMTPOn(),
 	})
 }
 

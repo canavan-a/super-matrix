@@ -38,6 +38,7 @@ type env struct {
 	// e2eRelayToken is the token of the last relay startRelay made.
 	e2eRelayToken string
 	srv           *api.API
+	edge          *edge.Edge
 	dir           string
 }
 
@@ -71,7 +72,7 @@ func newEnv(t *testing.T) *env {
 	srv := httptest.NewServer(e)
 	t.Cleanup(srv.Close)
 
-	en := &env{t: t, addr: strings.TrimPrefix(srv.URL, "http://"), srv: a, dir: dir, client: &http.Client{
+	en := &env{t: t, addr: strings.TrimPrefix(srv.URL, "http://"), srv: a, edge: e, dir: dir, client: &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Timeout:       10 * time.Second,
 	}}
@@ -164,7 +165,7 @@ func target(t *testing.T, tls bool) (host string, port int) {
 			"path": r.URL.RequestURI(), "host": r.Host,
 			"auth": r.Header.Get("Authorization"), "token": r.Header.Get("X-Supermatrix-Token"),
 			"cookie": r.Header.Get("Cookie"), "xff": r.Header.Get("X-Forwarded-For"),
-			"xfh": r.Header.Get("X-Forwarded-Host"),
+			"xfh": r.Header.Get("X-Forwarded-Host"), "user": r.Header.Get("X-Supermatrix-User"),
 		})
 	})
 	var s *httptest.Server

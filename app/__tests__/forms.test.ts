@@ -23,6 +23,7 @@ const existing: Deployment = {
   sessionTtlS: 86400,
   basicUser: '',
   hasBasicPassword: false,
+  otpEmails: [],
   ipAllowlist: ['10.0.0.0/8', '203.0.113.7/32'],
   certStatus: 'ok',
   certExpiresAt: '2027-01-01T00:00:00Z',
@@ -63,6 +64,7 @@ describe('deployment form', () => {
       allowRootLogin: true,
       sessionTtlS: 86400,
       basicUser: '',
+      otpEmails: [],
       ipAllowlist: ['10.0.0.0/8', '203.0.113.7/32'],
     });
     expect('loginPassword' in input).toBe(false);
@@ -86,6 +88,15 @@ describe('deployment form', () => {
       ipAllowlist: ' 1.2.3.4 \n\n10.0.0.0/8,  ::1 ',
     });
     expect(input).toMatchObject({tlsSkipVerify: false, sni: '', subdomain: 'grafana', ipAllowlist: ['1.2.3.4', '10.0.0.0/8', '::1']});
+  });
+
+  it('sends the email-code list one address per entry', () => {
+    const f = formFrom({...existing, authMode: 'otp', otpEmails: ['ann@example.com']});
+    expect(f.otpEmails).toBe('ann@example.com');
+    expect(formToInput({...f, otpEmails: ' ann@example.com \n\nbob@example.com, cy@example.com '})).toMatchObject({
+      authMode: 'otp',
+      otpEmails: ['ann@example.com', 'bob@example.com', 'cy@example.com'],
+    });
   });
 });
 

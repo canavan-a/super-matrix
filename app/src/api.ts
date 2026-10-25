@@ -48,7 +48,7 @@ export async function request<T>(server: string, method: string, path: string, t
 
 // ---- types (server/api/*.go DTOs) ----
 
-export type AuthMode = 'none' | 'login' | 'basic' | 'token';
+export type AuthMode = 'none' | 'login' | 'otp' | 'basic' | 'token';
 export type CertStatus = 'pending' | 'ok' | 'error' | 'off';
 
 export interface ServerInfo {
@@ -58,6 +58,8 @@ export interface ServerInfo {
   serverUrl: string;
   /** where relays reach QUIC; null when the server has it off */
   quic: {addr: string; serverName: string; pin?: string} | null;
+  /** whether email-code deployments can send codes (SMTP configured) */
+  smtp: boolean;
 }
 
 export type Transport = 'quic' | 'websocket';
@@ -104,6 +106,8 @@ export interface DeploymentToken {
   name: string;
   createdAt: string;
   lastUsedAt: string | null;
+  /** null never expires */
+  expiresAt: string | null;
 }
 
 export interface Deployment {
@@ -126,6 +130,8 @@ export interface Deployment {
   sessionTtlS: number;
   basicUser: string;
   hasBasicPassword: boolean;
+  /** who can get an email code (otp mode) */
+  otpEmails: string[];
   ipAllowlist: string[];
   certStatus: CertStatus;
   certExpiresAt: string | null;
@@ -153,6 +159,7 @@ export interface DeploymentInput {
   sessionTtlS?: number;
   basicUser?: string;
   basicPassword?: string;
+  otpEmails?: string[];
   ipAllowlist?: string[];
 }
 
@@ -214,8 +221,11 @@ export const api = {
   updateDeployment: (server: string, token: string, id: string, d: DeploymentInput) =>
     request<Deployment>(server, 'PATCH', `/v1/deployments/${id}`, token, d),
   deleteDeployment: (server: string, token: string, id: string) => request<void>(server, 'DELETE', `/v1/deployments/${id}`, token),
-  createToken: (server: string, token: string, id: string, name: string) =>
-    request<{id: string; name: string; token: string}>(server, 'POST', `/v1/deployments/${id}/tokens`, token, {name}),
+  createToken: (server: string, token: string, id: string, name: string, expiresInS: number) =>
+    request<{id: string; name: string; token: string; expiresAt: string | null}>(server, 'POST', `/v1/deployments/${id}/tokens`, token, {
+      name,
+      expiresInS,
+    }),
   deleteToken: (server: string, token: string, id: string, tid: string) =>
     request<void>(server, 'DELETE', `/v1/deployments/${id}/tokens/${tid}`, token),
 };

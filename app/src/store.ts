@@ -241,8 +241,9 @@ export async function deleteDeployment(id: string): Promise<void> {
   await refresh().catch(() => {});
 }
 
-export async function createToken(id: string, name: string): Promise<string> {
-  const {token} = await authed((s, t) => api.createToken(s, t, id, name));
+/** expiresInS: seconds the token works for; 0 never expires. */
+export async function createToken(id: string, name: string, expiresInS: number): Promise<string> {
+  const {token} = await authed((s, t) => api.createToken(s, t, id, name, expiresInS));
   await refresh().catch(() => {});
   return token;
 }

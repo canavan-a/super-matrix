@@ -11,6 +11,7 @@ import {
   KeyRound,
   Lock,
   LogOut,
+  Mail,
   LucideIcon,
   Plus,
   RefreshCw,
@@ -41,7 +42,8 @@ export type IconName =
   | 'globe'
   | 'external'
   | 'key'
-  | 'logout';
+  | 'logout'
+  | 'mail';
 
 const ICONS: Record<IconName, LucideIcon> = {
   gear: Settings,
@@ -63,6 +65,7 @@ const ICONS: Record<IconName, LucideIcon> = {
   external: ExternalLink,
   key: KeyRound,
   logout: LogOut,
+  mail: Mail,
 };
 
 export function Icon({

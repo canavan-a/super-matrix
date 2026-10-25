@@ -36,6 +36,8 @@ type Edge struct {
 	Admin http.Handler
 	// TokenUsed is told when a deployment token gets a request through.
 	TokenUsed func(tokenID string)
+	// Mail sends email-code sign-in codes; nil turns that sign-in off.
+	Mail Mailer
 
 	key        []byte
 	now        func() time.Time
@@ -44,14 +46,25 @@ type Edge struct {
 	loginLimit *guard.Limiter
 	failLimit  *guard.Limiter
 	basic      basicCache
+
+	otp otpStore
+	// Codes asked for: per client address, per deployment+address, and in
+	// all, so the form can't be used to spam an inbox or the SMTP account.
+	sendIPLimit    *guard.Limiter
+	sendEmailLimit *guard.Limiter
+	sendAllLimit   *guard.Limiter
 }
 
 func New(cfg config.Config, reg *registry.Registry, hub *tunnel.Hub, cookieKey []byte, admin http.Handler) *Edge {
 	e := &Edge{
 		cfg: cfg, reg: reg, hub: hub, key: cookieKey, Admin: admin, now: time.Now,
-		loginLimit: guard.NewLimiter(10, time.Minute),
-		failLimit:  guard.NewLimiter(10, time.Minute),
-		basic:      basicCache{ok: map[string]time.Time{}},
+		loginLimit:     guard.NewLimiter(10, time.Minute),
+		otp:            otpStore{codes: map[string]*otpCode{}},
+		sendIPLimit:    guard.NewLimiter(5, 10*time.Minute),
+		sendEmailLimit: guard.NewLimiter(3, 10*time.Minute),
+		sendAllLimit:   guard.NewLimiter(100, time.Hour),
+		failLimit:      guard.NewLimiter(10, time.Minute),
+		basic:          basicCache{ok: map[string]time.Time{}},
 	}
 	e.transport = &http.Transport{
 		DialContext:         e.dial,
@@ -89,7 +102,9 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		message(w, http.StatusForbidden, "Not allowed", "Your address ("+ip+") isn't on this deployment's allow list.")
 		return
 	}
-	if ent.AuthMode == database.AuthLogin && strings.HasPrefix(r.URL.Path, "/_supermatrix/") {
+	// Only the edge says who signed in.
+	r.Header.Del(UserHeader)
+	if (ent.AuthMode == database.AuthLogin || ent.AuthMode == database.AuthOTP) && strings.HasPrefix(r.URL.Path, "/_supermatrix/") {
 		e.loginRoutes(w, r, ent, ip)
 		return
 	}

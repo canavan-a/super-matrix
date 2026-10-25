@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -23,8 +24,17 @@ type Entry struct {
 	Host string
 	// Nets is the parsed IP allowlist; empty allows everyone.
 	Nets []netip.Prefix
-	// Tokens maps token hashes to token IDs.
-	Tokens map[string]string
+	// Tokens maps token hashes to their tokens.
+	Tokens map[string]Token
+	// OTPEmails is the set of addresses that can get a sign-in code.
+	OTPEmails map[string]bool
+}
+
+// Token is a deployment API token as the edge needs it.
+type Token struct {
+	ID string
+	// ExpiresAt is zero for a token that never expires.
+	ExpiresAt time.Time
 }
 
 type snapshot struct {
@@ -53,7 +63,7 @@ func (r *Registry) Reload() error {
 		return err
 	}
 	var toks []database.DeploymentToken
-	if err := r.db.Select("id", "deployment_id", "token_hash").Find(&toks).Error; err != nil {
+	if err := r.db.Select("id", "deployment_id", "token_hash", "expires_at").Find(&toks).Error; err != nil {
 		return err
 	}
 	s := &snapshot{
@@ -65,8 +75,13 @@ func (r *Registry) Reload() error {
 		if d.Host == nil {
 			continue // from before domains, with no SUPERMATRIX_BASE_DOMAIN to place it
 		}
-		e := &Entry{Deployment: d, Host: *d.Host, Tokens: map[string]string{}}
+		e := &Entry{Deployment: d, Host: *d.Host, Tokens: map[string]Token{}, OTPEmails: map[string]bool{}}
 		e.Nets, _ = ParseAllowlist(d.IPAllowlist)
+		for _, m := range strings.Split(d.OTPEmails, "\n") {
+			if m = strings.TrimSpace(m); m != "" {
+				e.OTPEmails[m] = true
+			}
+		}
 		s.byHost[e.Host] = e
 		s.byID[d.ID] = e
 		if d.Enabled {
@@ -78,7 +93,11 @@ func (r *Registry) Reload() error {
 	}
 	for _, t := range toks {
 		if e := s.byID[t.DeploymentID]; e != nil {
-			e.Tokens[t.TokenHash] = t.ID
+			tok := Token{ID: t.ID}
+			if t.ExpiresAt != nil {
+				tok.ExpiresAt = *t.ExpiresAt
+			}
+			e.Tokens[t.TokenHash] = tok
 		}
 	}
 	r.snap.Store(s)

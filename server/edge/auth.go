@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,6 +21,27 @@ import (
 	"main/database"
 	"main/registry"
 )
+
+// UserHeader tells the service behind an email-code deployment who signed
+// in. Whatever a client sends in it is dropped first.
+const UserHeader = "X-Supermatrix-User"
+
+// AuthHeader is on every 401 the edge sends for a deployment: "required"
+// (no credentials) or "expired" (a session or token that ran out), so a
+// front end or script can tell "sign in again" from "never signed in".
+const AuthHeader = "X-Supermatrix-Auth"
+
+// Auth states.
+const (
+	authOK       = "ok"
+	authRequired = "required"
+	authExpired  = "expired"
+)
+
+// cookieGrace keeps the cookie in the browser past its session's expiry,
+// so a request after it can be told apart from one that never signed in.
+// The signed expiry inside the cookie is what counts.
+const cookieGrace = 7 * 24 * time.Hour
 
 // LoadKey reads the cookie-signing key at path, making it on first start.
 func LoadKey(path string) ([]byte, error) {
@@ -55,12 +77,17 @@ func (e *Edge) cookieName() string {
 	return "supermatrix"
 }
 
-// Session cookies: "<deployment>|<expiry>|<kind>" plus an HMAC over that and
-// the password it was made with. kind is "d" (deployment password) or "r"
-// (root password), so changing either one signs those sessions out.
-func (e *Edge) sessionEpoch(ent *registry.Entry, kind string) string {
-	if kind == "r" {
+// Session cookies: "<deployment>|<expiry>|<kind>[|<email>]" plus an HMAC
+// over that and what it was made with. kind is "d" (deployment password),
+// "r" (root password) or "o" (an emailed code, with the address), so
+// changing a password signs those sessions out, as does taking an address
+// off the list.
+func (e *Edge) sessionEpoch(ent *registry.Entry, kind, email string) string {
+	switch kind {
+	case "r":
 		return Fingerprint(e.cfg.RootPassword)
+	case "o":
+		return "otp\x00" + email
 	}
 	return ent.LoginPassHash
 }
@@ -71,56 +98,88 @@ func (e *Edge) sign(payload, epoch string) string {
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
-func (e *Edge) makeCookie(ent *registry.Entry, kind string) *http.Cookie {
-	ttl := time.Duration(ent.SessionTTLS) * time.Second
-	if ttl <= 0 {
-		ttl = 7 * 24 * time.Hour
+func sessionTTL(ent *registry.Entry) time.Duration {
+	if ttl := time.Duration(ent.SessionTTLS) * time.Second; ttl > 0 {
+		return ttl
 	}
-	exp := e.now().Add(ttl)
+	return 7 * 24 * time.Hour
+}
+
+func (e *Edge) makeCookie(ent *registry.Entry, kind, email string) *http.Cookie {
+	exp := e.now().Add(sessionTTL(ent))
 	payload := ent.ID + "|" + strconv.FormatInt(exp.Unix(), 10) + "|" + kind
-	v := base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + e.sign(payload, e.sessionEpoch(ent, kind))
+	if kind == "o" {
+		payload += "|" + email
+	}
+	v := base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + e.sign(payload, e.sessionEpoch(ent, kind, email))
+	keep := sessionTTL(ent) + cookieGrace
 	return &http.Cookie{
-		Name: e.cookieName(), Value: v, Path: "/", Expires: exp, MaxAge: int(ttl.Seconds()),
+		Name: e.cookieName(), Value: v, Path: "/", Expires: exp.Add(cookieGrace), MaxAge: int(keep.Seconds()),
 		HttpOnly: true, Secure: e.cfg.TLSOn(), SameSite: http.SameSiteLaxMode,
 	}
 }
 
-func (e *Edge) validCookie(r *http.Request, ent *registry.Entry) bool {
+func (e *Edge) clearCookie() *http.Cookie {
+	return &http.Cookie{Name: e.cookieName(), Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: e.cfg.TLSOn(), SameSite: http.SameSiteLaxMode}
+}
+
+// session is a signed-in visitor.
+type session struct {
+	Email   string // otp sessions only
+	Expires time.Time
+}
+
+// session checks the request's cookie against ent: authOK, authExpired (a
+// genuine session that ran out) or authRequired (none, or not valid here).
+func (e *Edge) session(r *http.Request, ent *registry.Entry) (session, string) {
 	c, err := r.Cookie(e.cookieName())
 	if err != nil {
-		return false
+		return session{}, authRequired
 	}
 	enc, mac, ok := strings.Cut(c.Value, ".")
 	if !ok {
-		return false
+		return session{}, authRequired
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(enc)
 	if err != nil {
-		return false
+		return session{}, authRequired
 	}
 	payload := string(raw)
 	parts := strings.Split(payload, "|")
-	if len(parts) != 3 || parts[0] != ent.ID {
-		return false
+	if len(parts) < 3 || parts[0] != ent.ID {
+		return session{}, authRequired
 	}
 	exp, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil || e.now().Unix() > exp {
-		return false
+	if err != nil {
+		return session{}, authRequired
 	}
-	switch parts[2] {
-	case "d":
+	kind, email := parts[2], ""
+	switch {
+	case kind == "d" && len(parts) == 3 && ent.AuthMode == database.AuthLogin:
 		if ent.LoginPassHash == "" {
-			return false
+			return session{}, authRequired
 		}
-	case "r":
+	case kind == "r" && len(parts) == 3 && ent.AuthMode == database.AuthLogin:
 		if !ent.AllowRootLogin {
-			return false
+			return session{}, authRequired
+		}
+	case kind == "o" && len(parts) == 4 && ent.AuthMode == database.AuthOTP:
+		email = parts[3]
+		if !ent.OTPEmails[email] {
+			return session{}, authRequired
 		}
 	default:
-		return false
+		return session{}, authRequired
 	}
-	want := e.sign(payload, e.sessionEpoch(ent, parts[2]))
-	return hmac.Equal([]byte(mac), []byte(want))
+	want := e.sign(payload, e.sessionEpoch(ent, kind, email))
+	if !hmac.Equal([]byte(mac), []byte(want)) {
+		return session{}, authRequired
+	}
+	s := session{Email: email, Expires: time.Unix(exp, 0)}
+	if !e.now().Before(s.Expires) {
+		return s, authExpired
+	}
+	return s, authOK
 }
 
 // stripCookie removes our session cookie before the request goes upstream.
@@ -139,6 +198,37 @@ func wantsHTML(r *http.Request) bool {
 		strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func loginURL(next string, expired bool) string {
+	u := "/_supermatrix/login?next=" + url.QueryEscape(next)
+	if expired {
+		u += "&expired=1"
+	}
+	return u
+}
+
+// signInRequired sends a page load to the sign-in page and answers anything
+// else (fetch/XHR, scripts) with a 401 a front end can act on.
+func (e *Edge) signInRequired(w http.ResponseWriter, r *http.Request, state string) {
+	login := loginURL(r.URL.RequestURI(), state == authExpired)
+	if wantsHTML(r) {
+		http.Redirect(w, r, login, http.StatusSeeOther)
+		return
+	}
+	msg := "sign in required"
+	if state == authExpired {
+		msg = "session expired"
+	}
+	w.Header().Set(AuthHeader, state)
+	writeJSON(w, http.StatusUnauthorized, map[string]string{"error": msg, "auth": state, "login": login})
+}
+
 // authorize enforces ent's auth mode. It writes the response and returns
 // false when the request may not go through.
 func (e *Edge) authorize(w http.ResponseWriter, r *http.Request, ent *registry.Entry, ip string) bool {
@@ -146,16 +236,16 @@ func (e *Edge) authorize(w http.ResponseWriter, r *http.Request, ent *registry.E
 	case database.AuthNone:
 		return true
 
-	case database.AuthLogin:
-		if e.validCookie(r, ent) {
+	case database.AuthLogin, database.AuthOTP:
+		s, state := e.session(r, ent)
+		if state == authOK {
 			e.stripCookie(r)
+			if s.Email != "" {
+				r.Header.Set(UserHeader, s.Email)
+			}
 			return true
 		}
-		if wantsHTML(r) {
-			http.Redirect(w, r, "/_supermatrix/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
-			return false
-		}
-		http.Error(w, "sign in required", http.StatusUnauthorized)
+		e.signInRequired(w, r, state)
 		return false
 
 	case database.AuthBasic:
@@ -177,6 +267,7 @@ func (e *Edge) authorize(w http.ResponseWriter, r *http.Request, ent *registry.E
 			e.failLimit.Allow(ip, e.now())
 		}
 		w.Header().Set("WWW-Authenticate", `Basic realm="Super Matrix", charset="UTF-8"`)
+		w.Header().Set(AuthHeader, authRequired)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return false
 
@@ -186,16 +277,23 @@ func (e *Edge) authorize(w http.ResponseWriter, r *http.Request, ent *registry.E
 			tok = strings.TrimSpace(b)
 		}
 		if tok != "" {
-			if id, ok := ent.Tokens[database.HashSecret(tok)]; ok {
+			if t, ok := ent.Tokens[database.HashSecret(tok)]; ok {
+				if !t.ExpiresAt.IsZero() && !e.now().Before(t.ExpiresAt) {
+					w.Header().Set("WWW-Authenticate", `Bearer realm="Super Matrix", error="invalid_token", error_description="token expired"`)
+					w.Header().Set(AuthHeader, authExpired)
+					http.Error(w, "token expired", http.StatusUnauthorized)
+					return false
+				}
 				r.Header.Del("Authorization")
 				r.Header.Del("X-Supermatrix-Token")
 				if e.TokenUsed != nil {
-					e.TokenUsed(id)
+					e.TokenUsed(t.ID)
 				}
 				return true
 			}
 		}
 		w.Header().Set("WWW-Authenticate", `Bearer realm="Super Matrix"`)
+		w.Header().Set(AuthHeader, authRequired)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return false
 	}
@@ -249,17 +347,42 @@ func safeNext(next string) string {
 	return next
 }
 
-// loginRoutes serves /_supermatrix/* on deployments in login mode.
+// loginRoutes serves /_supermatrix/* on deployments in login or otp mode.
 func (e *Edge) loginRoutes(w http.ResponseWriter, r *http.Request, ent *registry.Entry, ip string) {
+	switch r.URL.Path {
+	case "/_supermatrix/session":
+		// For front ends: who's signed in and until when, or why not.
+		s, state := e.session(r, ent)
+		if state != authOK {
+			w.Header().Set(AuthHeader, state)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"signedIn": false, "auth": state, "login": loginURL("/", state == authExpired)})
+			return
+		}
+		out := map[string]any{"signedIn": true, "expiresAt": s.Expires.UTC()}
+		if s.Email != "" {
+			out["email"] = s.Email
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	case "/_supermatrix/logout":
+		http.SetCookie(w, e.clearCookie())
+		http.Redirect(w, r, "/_supermatrix/login", http.StatusSeeOther)
+		return
+	}
+	if ent.AuthMode == database.AuthOTP {
+		e.otpRoutes(w, r, ent, ip)
+		return
+	}
 	switch r.URL.Path {
 	case "/_supermatrix/login":
 		next := safeNext(r.FormValue("next"))
+		notice := expiredNotice(r)
 		if r.Method != http.MethodPost {
-			if e.validCookie(r, ent) {
+			if _, state := e.session(r, ent); state == authOK {
 				http.Redirect(w, r, next, http.StatusSeeOther)
 				return
 			}
-			render(w, http.StatusOK, "login", pageData{Title: "Sign in", Host: ent.Host, Next: next})
+			render(w, http.StatusOK, "login", pageData{Title: "Sign in", Host: ent.Host, Next: next, Notice: notice})
 			return
 		}
 		if !e.loginLimit.Allow(ip, e.now()) {
@@ -278,12 +401,16 @@ func (e *Edge) loginRoutes(w http.ResponseWriter, r *http.Request, ent *registry
 			render(w, http.StatusUnauthorized, "login", pageData{Title: "Sign in", Host: ent.Host, Next: next, Error: "Wrong password."})
 			return
 		}
-		http.SetCookie(w, e.makeCookie(ent, kind))
+		http.SetCookie(w, e.makeCookie(ent, kind, ""))
 		http.Redirect(w, r, next, http.StatusSeeOther)
-	case "/_supermatrix/logout":
-		http.SetCookie(w, &http.Cookie{Name: e.cookieName(), Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: e.cfg.TLSOn(), SameSite: http.SameSiteLaxMode})
-		http.Redirect(w, r, "/_supermatrix/login", http.StatusSeeOther)
 	default:
 		message(w, http.StatusNotFound, "Not found", "Nothing here.")
 	}
+}
+
+func expiredNotice(r *http.Request) string {
+	if r.Method != http.MethodPost && r.FormValue("expired") == "1" {
+		return "Your session expired. Sign in again."
+	}
+	return ""
 }

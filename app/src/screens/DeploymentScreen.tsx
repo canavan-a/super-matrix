@@ -1,7 +1,7 @@
 import React, {useEffect, useState} from 'react';
 import {Linking, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
-import {AuthMode, Deployment, DeploymentInput} from '../api';
+import {AuthMode, Deployment, DeploymentInput, DeploymentToken} from '../api';
 import {Icon} from '../components/Icon';
 import {transportBadge, viaLine} from '../link';
 import {Notice} from '../components/Notice';
@@ -34,6 +34,8 @@ export interface DeploymentForm {
   basicUser: string;
   /** a new basic-auth password; "" keeps the current one */
   basicPassword: string;
+  /** one email address per line (otp mode) */
+  otpEmails: string;
   /** one CIDR or address per line */
   ipAllowlist: string;
 }
@@ -57,6 +59,7 @@ export function formFrom(d: Deployment | null, relayId = '', domainId = ''): Dep
     sessionTtlS: d?.sessionTtlS ?? 7 * 24 * 3600,
     basicUser: d?.basicUser ?? '',
     basicPassword: '',
+    otpEmails: (d?.otpEmails ?? []).join('\n'),
     ipAllowlist: (d?.ipAllowlist ?? []).join('\n'),
   };
 }
@@ -78,6 +81,10 @@ export function formToInput(f: DeploymentForm): DeploymentInput {
     allowRootLogin: f.allowRootLogin,
     sessionTtlS: f.sessionTtlS,
     basicUser: f.basicUser.trim(),
+    otpEmails: f.otpEmails
+      .split(/[\n,]/)
+      .map(s => s.trim())
+      .filter(Boolean),
     ipAllowlist: f.ipAllowlist
       .split(/[\n,]/)
       .map(s => s.trim())
@@ -91,6 +98,7 @@ export function formToInput(f: DeploymentForm): DeploymentInput {
 
 const AUTH_OPTIONS: {value: AuthMode; label: string}[] = [
   {value: 'login', label: AUTH_LABEL.login},
+  {value: 'otp', label: AUTH_LABEL.otp},
   {value: 'basic', label: AUTH_LABEL.basic},
   {value: 'token', label: AUTH_LABEL.token},
   {value: 'none', label: 'Public'},
@@ -98,13 +106,17 @@ const AUTH_OPTIONS: {value: AuthMode; label: string}[] = [
 
 const AUTH_HINT: Record<AuthMode, string> = {
   login: 'Visitors get a Super Matrix sign-in page and a session cookie for this host only.',
+  otp:
+    "Only addresses on the list get in: they enter their email, get a 6-digit code, and get a session cookie. The service sees who it is in X-Supermatrix-User; its own fetch calls get a 401 with X-Supermatrix-Auth: expired when the session ends.",
   basic: "The browser's own username and password prompt. Handy for scripts and curl -u.",
   token: 'Requests must carry a token: Authorization: Bearer <token>, or an X-Supermatrix-Token header.',
   none: 'Anyone with the address can reach it. No password.',
 };
 
 const TTL_OPTIONS = [
+  {value: 900, label: '15 min'},
   {value: 3600, label: '1 hour'},
+  {value: 8 * 3600, label: '8 hours'},
   {value: 24 * 3600, label: '1 day'},
   {value: 7 * 24 * 3600, label: '7 days'},
   {value: 30 * 24 * 3600, label: '30 days'},
@@ -341,6 +353,32 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
         </>
       )}
 
+      {form.authMode === 'otp' && (
+        <>
+          {info && !info.smtp && (
+            <Notice kind="info" title="Email isn't set up on the server">
+              Codes can't be sent until the server has SMTP: SUPERMATRIX_SMTP_EMAIL and SUPERMATRIX_SMTP_APP_PASSWORD in its
+              environment file.
+            </Notice>
+          )}
+          <Label spaced>Who can sign in</Label>
+          <Input
+            value={form.otpEmails}
+            onChangeText={v => set({otpEmails: v})}
+            multiline
+            mono
+            keyboardType="email-address"
+            placeholder={'ann@example.com\nbob@example.com'}
+            style={styles.multiline}
+            accessibilityLabel="Email addresses that can sign in"
+          />
+          <Hint>One address per line. Taking one off signs that person out.</Hint>
+          <Label>Stay signed in for</Label>
+          <Chips options={TTL_OPTIONS} value={form.sessionTtlS} onChange={v => set({sessionTtlS: v})} />
+          <Hint>After this they're asked for a new code.</Hint>
+        </>
+      )}
+
       {form.authMode === 'basic' && (
         <>
           <Label spaced>Username</Label>
@@ -409,10 +447,28 @@ function certLine(d: Deployment): string {
 }
 
 /** API tokens for a deployment in token mode: list, add (shown once), revoke. */
+const TOKEN_EXPIRY_OPTIONS = [
+  {value: 0, label: 'Never'},
+  {value: 3600, label: '1 hour'},
+  {value: 24 * 3600, label: '1 day'},
+  {value: 7 * 24 * 3600, label: '7 days'},
+  {value: 30 * 24 * 3600, label: '30 days'},
+  {value: 90 * 24 * 3600, label: '90 days'},
+  {value: 365 * 24 * 3600, label: '1 year'},
+];
+
+function tokenMeta(t: DeploymentToken): string {
+  const used = t.lastUsedAt ? `last used ${new Date(t.lastUsedAt).toLocaleString()}` : 'never used';
+  if (!t.expiresAt) return used;
+  const exp = new Date(t.expiresAt);
+  return exp.getTime() <= Date.now() ? `expired ${exp.toLocaleString()} · ${used}` : `expires ${exp.toLocaleString()} · ${used}`;
+}
+
 function Tokens({d}: {d: Deployment}) {
   const theme = useTheme();
   const styles = makeStyles(theme);
   const [name, setName] = useState('');
+  const [expiresInS, setExpiresInS] = useState(0);
   const [fresh, setFresh] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -421,7 +477,7 @@ function Tokens({d}: {d: Deployment}) {
     setBusy(true);
     setError(null);
     try {
-      setFresh(await createToken(d.id, name.trim()));
+      setFresh(await createToken(d.id, name.trim(), expiresInS));
       setName('');
     } catch (e) {
       setError((e as Error).message);
@@ -438,7 +494,7 @@ function Tokens({d}: {d: Deployment}) {
         <View key={t.id} style={styles.tokenRow}>
           <View style={styles.flex}>
             <Text style={styles.tokenName}>{t.name}</Text>
-            <Text style={styles.tokenMeta}>{t.lastUsedAt ? `last used ${new Date(t.lastUsedAt).toLocaleString()}` : 'never used'}</Text>
+            <Text style={styles.tokenMeta}>{tokenMeta(t)}</Text>
           </View>
           <Pressable
             onPress={() =>
@@ -456,6 +512,9 @@ function Tokens({d}: {d: Deployment}) {
         <Input style={styles.flex} value={name} onChangeText={setName} placeholder="Token name, e.g. ci" onSubmitEditing={add} />
         <Button label="Add" kind="secondary" onPress={add} busy={busy} disabled={!name.trim()} />
       </View>
+      <Label>New token expires</Label>
+      <Chips options={TOKEN_EXPIRY_OPTIONS} value={expiresInS} onChange={setExpiresInS} />
+      <Hint>An expired token gets a 401 with X-Supermatrix-Auth: expired. Revoke and add a new one to rotate.</Hint>
       {fresh && (
         <>
           <Notice kind="success" title="New token: copy it now, it won't be shown again" />

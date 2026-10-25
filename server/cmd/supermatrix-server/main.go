@@ -14,6 +14,7 @@ import (
 	"main/config"
 	"main/database"
 	"main/edge"
+	"main/mail"
 	"main/registry"
 	"main/tunnel"
 	"main/version"
@@ -47,7 +48,11 @@ func main() {
 	a := api.New(db, cfg, reg, hub)
 	e := edge.New(cfg, reg, hub, key, a.Handler())
 	e.TokenUsed = a.TokenUsed
+	e.Mail = mail.New(cfg)
 	a.AfterChange = e.Changed
+	if !cfg.SMTPOn() && cfg.TLSOn() {
+		log.Printf("supermatrix: SMTP isn't configured, so email-code deployments can't send codes")
+	}
 
 	srv := func(addr string, h http.Handler) *http.Server {
 		// No write timeout: proxied responses can stream for as long as

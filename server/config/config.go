@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -47,9 +48,19 @@ type Config struct {
 	// admin host and QUICAddr's port). Set it when a NAT or firewall maps a
 	// different port.
 	QUICPublic string
+	// SMTP sends the sign-in codes for email-code deployments, as in
+	// super-atlas: SMTPHost/SMTPPort default to Gmail, SMTPEmail is both
+	// the login and the From address, SMTPAppPassword its app password.
+	SMTPHost        string
+	SMTPPort        int
+	SMTPEmail       string
+	SMTPAppPassword string
 }
 
 func (c Config) TLSOn() bool { return c.TLS != "off" }
+
+// SMTPOn reports whether sign-in codes can be emailed.
+func (c Config) SMTPOn() bool { return c.SMTPEmail != "" && c.SMTPAppPassword != "" }
 
 func Load() (Config, error) {
 	dataDir := getEnv("SUPERMATRIX_DATA_DIR", ".data")
@@ -69,7 +80,16 @@ func Load() (Config, error) {
 		QUIC:          os.Getenv("SUPERMATRIX_QUIC") != "off",
 		QUICAddr:      os.Getenv("SUPERMATRIX_QUIC_ADDR"),
 		QUICPublic:    os.Getenv("SUPERMATRIX_QUIC_PUBLIC"),
+
+		SMTPHost:        getEnv("SUPERMATRIX_SMTP_HOST", "smtp.gmail.com"),
+		SMTPEmail:       os.Getenv("SUPERMATRIX_SMTP_EMAIL"),
+		SMTPAppPassword: os.Getenv("SUPERMATRIX_SMTP_APP_PASSWORD"),
 	}
+	port, err := strconv.Atoi(getEnv("SUPERMATRIX_SMTP_PORT", "587"))
+	if err != nil || port < 1 || port > 65535 {
+		return c, errors.New("SUPERMATRIX_SMTP_PORT must be a port number")
+	}
+	c.SMTPPort = port
 	if c.QUICAddr == "" {
 		c.QUICAddr = c.HTTPSAddr
 		if !c.TLSOn() {

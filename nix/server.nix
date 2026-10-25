@@ -67,6 +67,21 @@ in
       '';
     };
 
+    environmentFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/etc/supermatrix/env";
+      description = ''
+        File with the SMTP account email-code deployments send sign-in codes
+        from: SUPERMATRIX_SMTP_EMAIL=… and SUPERMATRIX_SMTP_APP_PASSWORD=…
+        (an app password), plus SUPERMATRIX_SMTP_HOST=… and
+        SUPERMATRIX_SMTP_PORT=… for anything but Gmail (default
+        smtp.gmail.com, 587). Without it, email-code sign-in can't send
+        codes; everything else works. Give a runtime path as a string, not a
+        Nix path literal (which would copy it into the store).
+      '';
+    };
+
     tls = lib.mkOption {
       type = lib.types.enum [ "acme" "off" ];
       default = "acme";
@@ -253,6 +268,7 @@ in
         User = "supermatrix";
         Group = "supermatrix";
         LoadCredential = [ "root-password:${cfg.rootPasswordFile}" ];
+        EnvironmentFile = lib.mkIf (cfg.environmentFile != null) cfg.environmentFile;
         # 80/443 without running as root.
         AmbientCapabilities = lib.optional bindsLowPorts "CAP_NET_BIND_SERVICE";
         CapabilityBoundingSet = lib.optional bindsLowPorts "CAP_NET_BIND_SERVICE";

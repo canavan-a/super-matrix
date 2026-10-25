@@ -13,6 +13,7 @@ import {Theme, useTheme} from '../theme';
 export const AUTH_LABEL: Record<AuthMode, string> = {
   none: 'Public',
   login: 'Login',
+  otp: 'Email code',
   basic: 'Basic auth',
   token: 'API tokens',
 };
@@ -20,6 +21,7 @@ export const AUTH_LABEL: Record<AuthMode, string> = {
 export const AUTH_ICON: Record<AuthMode, IconName> = {
   none: 'globe',
   login: 'lock',
+  otp: 'mail',
   basic: 'shield',
   token: 'key',
 };

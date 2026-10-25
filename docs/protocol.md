@@ -173,11 +173,34 @@ Checked in this order:
      login off, ends those sessions. Browsers without a session are redirected
      (303) to the sign-in page; other requests get 401. `/_supermatrix/logout`
      clears the cookie. The signing key is `DATA_DIR/cookie.key`.
+   - `otp`: the same sign-in path, by email. The visitor enters an address;
+     if it's on the deployment's list a 6-digit code is emailed over SMTP
+     (`SUPERMATRIX_SMTP_EMAIL`, `_APP_PASSWORD`, `_HOST` default
+     smtp.gmail.com, `_PORT` default 587; with TLS off and no SMTP the code
+     is logged instead). The page looks the same whether or not the address
+     is listed. Codes live in memory, hashed, for 10 minutes and 5 guesses;
+     `/_supermatrix/verify` takes the code and sets the cookie, with kind `o`
+     and the address. Taking an address off the list ends its sessions. The
+     service gets the address in `X-Supermatrix-User` (any client-sent value
+     is dropped first). Codes asked for are limited to 5 per 10 minutes per
+     client address, 3 per 10 minutes per deployment and email, and 100 an
+     hour in all.
    - `basic`: HTTP basic auth against a username and bcrypt hash. Successful
      checks are cached for 10 minutes so bcrypt doesn't run on every request.
    - `token`: `Authorization: Bearer smt_…` or `X-Supermatrix-Token: smt_…`,
      looked up by SHA-256. A token's last use is recorded, at most once a
      minute.
+     A token can be made with an expiry (`expiresInS`, 5 minutes to 5
+     years; none never expires).
+   Session length (`session_ttl_s`, 5 minutes to a year) applies to `login`
+   and `otp`. The cookie is kept a week past that so an ended session can be
+   told apart from none: every 401 from a deployment carries
+   `X-Supermatrix-Auth: required` or `expired` (also expired tokens), and in
+   `login`/`otp` mode the body is JSON `{"error", "auth", "login"}`, `login`
+   being the sign-in URL. Page loads (GET/HEAD wanting HTML) are redirected
+   there instead, with `&expired=1` when the session ran out.
+   `/_supermatrix/session` answers `{"signedIn": true, "email", "expiresAt"}`
+   or a 401, for front ends that want to warn before a session ends.
 4. The Super Matrix cookie, `Authorization` (for basic and token mode) and
    `X-Supermatrix-Token` are removed before the request goes upstream.
 
@@ -200,7 +223,7 @@ tokens) and `ws` needs `Authorization: Bearer sms_…`.
 | `GET/POST /v1/domains {name}`, `DELETE /v1/domains/:id` | domains: `name` is `*.example.com` (wildcard) or `status.foo.org` (exact). A domain in use can't be deleted |
 | `GET /v1/domains/:id/dns` | whether the domain (for a wildcard, a random name under it) resolves to the same addresses as the admin host: `{ok, probe, addresses, expected, detail}` |
 | `GET/POST /v1/deployments`, `GET/PATCH/DELETE /v1/deployments/:id` | deployments (`domainId` + `subdomain`, which is ignored on an exact domain). Passwords go in as plaintext (`loginPassword`, `basicPassword`, at least 8 characters; `""` clears one) and are stored as bcrypt hashes |
-| `POST /v1/deployments/:id/tokens {name}`, `DELETE …/tokens/:tid` | API tokens; `POST` returns the token once |
+| `POST /v1/deployments/:id/tokens {name, expiresInS?}`, `DELETE …/tokens/:tid` | API tokens; `POST` returns the token once. `expiresInS` 0 or missing never expires |
 
 Sessions are tied to a fingerprint of the root password, so changing the
 password file and restarting signs every app out.
