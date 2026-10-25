@@ -44,8 +44,8 @@ func TestDomains(t *testing.T) {
 			e.api("POST", "/v1/domains", map[string]any{"name": n}, 400, nil)
 		}
 		e.api("POST", "/v1/domains", map[string]any{"name": "127.0.0.1"}, 400, nil) // the admin host
-		e.api("POST", "/v1/domains", map[string]any{"name": "second.example"}, 409, nil)
-		e.api("POST", "/v1/domains", map[string]any{"name": "*.status.other.org"}, 409, nil) // added as exact already
+		e.api("POST", "/v1/domains", map[string]any{"name": "*.second.example"}, 409, nil)
+		e.api("POST", "/v1/domains", map[string]any{"name": "status.other.org"}, 409, nil)
 	})
 
 	mk := func(domainID, sub string, want int) dep {
@@ -80,6 +80,20 @@ func TestDomains(t *testing.T) {
 			t.Fatalf("status %d", res.StatusCode)
 		}
 		mk(exact.ID, "", 400) // one deployment per exact domain
+	})
+
+	t.Run("exact alongside its wildcard", func(t *testing.T) {
+		var apex domain
+		e.api("POST", "/v1/domains", map[string]any{"name": "second.example"}, 201, &apex)
+		if apex.Wildcard || apex.Label != "second.example" {
+			t.Fatalf("apex: %+v", apex)
+		}
+		d := mk(apex.ID, "", 201)
+		if d.Host != "second.example" {
+			t.Fatalf("host %q", d.Host)
+		}
+		e.api("DELETE", "/v1/deployments/"+d.ID, nil, 200, nil)
+		e.api("DELETE", "/v1/domains/"+apex.ID, nil, 200, nil)
 	})
 
 	t.Run("unknown hosts", func(t *testing.T) {

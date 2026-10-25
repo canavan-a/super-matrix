@@ -77,8 +77,9 @@ func (a *API) createDomain(c *gin.Context) {
 		abort(c, http.StatusBadRequest, name+" is the admin host")
 		return
 	}
-	// name is unique: "*.foo.org" and "foo.org" can't both be added.
-	if old, err := database.First[database.Domain](a.db.Where("name = ?", name)); err != nil {
+	// "*.foo.org" and "foo.org" can both be added: the wildcard's hosts
+	// are always <label>.foo.org, never foo.org itself.
+	if old, err := database.First[database.Domain](a.db.Where("name = ? AND wildcard = ?", name, wildcard)); err != nil {
 		abort(c, http.StatusInternalServerError, "server error")
 		return
 	} else if old != nil {
