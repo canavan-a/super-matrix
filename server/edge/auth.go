@@ -27,15 +27,20 @@ import (
 const UserHeader = "X-Supermatrix-User"
 
 // AuthHeader is on every 401 the edge sends for a deployment: "required"
-// (no credentials) or "expired" (a session or token that ran out), so a
-// front end or script can tell "sign in again" from "never signed in".
+// (no credentials), "expired" (a session that ran out), "token_expired" or
+// "token_invalid" (an API token that ran out or isn't one of the
+// deployment's), so a front end or script can tell "sign in again" from
+// "never signed in" from "fix the token". Token failures are never
+// redirected to the sign-in page.
 const AuthHeader = "X-Supermatrix-Auth"
 
 // Auth states.
 const (
-	authOK       = "ok"
-	authRequired = "required"
-	authExpired  = "expired"
+	authOK           = "ok"
+	authRequired     = "required"
+	authExpired      = "expired"
+	authTokenExpired = "token_expired"
+	authTokenInvalid = "token_invalid"
 )
 
 // cookieGrace keeps the cookie in the browser past its session's expiry,
@@ -230,8 +235,14 @@ func (e *Edge) signInRequired(w http.ResponseWriter, r *http.Request, state stri
 }
 
 // authorize enforces ent's auth mode. It writes the response and returns
-// false when the request may not go through.
+// false when the request may not go through. In every mode but none, one of
+// the deployment's API tokens gets in instead of the mode's own sign-in.
 func (e *Edge) authorize(w http.ResponseWriter, r *http.Request, ent *registry.Entry, ip string) bool {
+	if ent.AuthMode != database.AuthNone {
+		if ok, done := e.tokenAuth(w, r, ent); done {
+			return ok
+		}
+	}
 	switch ent.AuthMode {
 	case database.AuthNone:
 		return true
@@ -272,33 +283,61 @@ func (e *Edge) authorize(w http.ResponseWriter, r *http.Request, ent *registry.E
 		return false
 
 	case database.AuthToken:
-		tok := r.Header.Get("X-Supermatrix-Token")
-		if b, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && tok == "" {
-			tok = strings.TrimSpace(b)
-		}
-		if tok != "" {
-			if t, ok := ent.Tokens[database.HashSecret(tok)]; ok {
-				if !t.ExpiresAt.IsZero() && !e.now().Before(t.ExpiresAt) {
-					w.Header().Set("WWW-Authenticate", `Bearer realm="Super Matrix", error="invalid_token", error_description="token expired"`)
-					w.Header().Set(AuthHeader, authExpired)
-					http.Error(w, "token expired", http.StatusUnauthorized)
-					return false
-				}
-				r.Header.Del("Authorization")
-				r.Header.Del("X-Supermatrix-Token")
-				if e.TokenUsed != nil {
-					e.TokenUsed(t.ID)
-				}
-				return true
-			}
-		}
-		w.Header().Set("WWW-Authenticate", `Bearer realm="Super Matrix"`)
-		w.Header().Set(AuthHeader, authRequired)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		// tokenAuth found none.
+		tokenRequired(w)
 		return false
 	}
 	http.Error(w, "misconfigured deployment", http.StatusForbidden)
 	return false
+}
+
+// tokenAuth checks r for one of ent's API tokens, in X-Supermatrix-Token or
+// Authorization: Bearer. done is false when r carries none, leaving the
+// decision to the auth mode; otherwise ok says whether it may go through.
+// Outside token mode an unknown Bearer token is left alone too: it may be
+// the service's own.
+func (e *Edge) tokenAuth(w http.ResponseWriter, r *http.Request, ent *registry.Entry) (ok, done bool) {
+	header := "X-Supermatrix-Token"
+	tok := r.Header.Get(header)
+	if tok == "" {
+		b, bearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !bearer || strings.TrimSpace(b) == "" {
+			return false, false
+		}
+		header, tok = "Authorization", strings.TrimSpace(b)
+	}
+	t, found := ent.Tokens[database.HashSecret(tok)]
+	if !found {
+		if header == "Authorization" && ent.AuthMode != database.AuthToken {
+			return false, false
+		}
+		tokenFailed(w, authTokenInvalid, "unknown token")
+		return false, true
+	}
+	if !t.ExpiresAt.IsZero() && !e.now().Before(t.ExpiresAt) {
+		tokenFailed(w, authTokenExpired, "token expired")
+		return false, true
+	}
+	r.Header.Del(header)
+	e.stripCookie(r)
+	if e.TokenUsed != nil {
+		e.TokenUsed(t.ID)
+	}
+	return true, true
+}
+
+func tokenRequired(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="Super Matrix"`)
+	w.Header().Set(AuthHeader, authRequired)
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+}
+
+// tokenFailed answers a bad API token with a 401 in every mode, page loads
+// included: a script gets a state it can act on, not the sign-in page.
+func tokenFailed(w http.ResponseWriter, state, msg string) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="Super Matrix", error="invalid_token", error_description="`+msg+`"`)
+	w.Header().Set(AuthHeader, state)
+	writeJSON(w, http.StatusUnauthorized, map[string]string{"error": msg, "auth": state})
 }
 
 // basicCache remembers recent successful basic-auth checks: bcrypt on every

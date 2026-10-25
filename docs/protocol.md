@@ -187,22 +187,30 @@ Checked in this order:
      hour in all.
    - `basic`: HTTP basic auth against a username and bcrypt hash. Successful
      checks are cached for 10 minutes so bcrypt doesn't run on every request.
-   - `token`: `Authorization: Bearer smt_…` or `X-Supermatrix-Token: smt_…`,
-     looked up by SHA-256. A token's last use is recorded, at most once a
-     minute.
-     A token can be made with an expiry (`expiresInS`, 5 minutes to 5
-     years; none never expires).
+   - `token`: only API tokens (below) get in.
+
+   API tokens: `Authorization: Bearer smt_…` or `X-Supermatrix-Token: smt_…`,
+   looked up by SHA-256. In every mode but `none`, one of the deployment's
+   tokens gets the request in instead of the mode's own sign-in. A token
+   that fails gets a 401 in every mode, never the sign-in page, with
+   `X-Supermatrix-Auth: token_expired` (it ran out) or `token_invalid` (not
+   one of the deployment's) and a JSON body `{"error", "auth"}`. The
+   exception is an unknown Bearer token outside `token` mode: it's left
+   alone (it may be the service's own) and the mode decides. A token's last use is recorded, at most once a
+   minute. A token can be made with an expiry (`expiresInS`, 5 minutes to
+   5 years; none never expires).
    Session length (`session_ttl_s`, 5 minutes to a year) applies to `login`
    and `otp`. The cookie is kept a week past that so an ended session can be
    told apart from none: every 401 from a deployment carries
-   `X-Supermatrix-Auth: required` or `expired` (also expired tokens), and in
+   `X-Supermatrix-Auth: required` or `expired` (or a token state above), and in
    `login`/`otp` mode the body is JSON `{"error", "auth", "login"}`, `login`
    being the sign-in URL. Page loads (GET/HEAD wanting HTML) are redirected
    there instead, with `&expired=1` when the session ran out.
    `/_supermatrix/session` answers `{"signedIn": true, "email", "expiresAt"}`
    or a 401, for front ends that want to warn before a session ends.
-4. The Super Matrix cookie, `Authorization` (for basic and token mode) and
-   `X-Supermatrix-Token` are removed before the request goes upstream.
+4. The Super Matrix cookie, `Authorization` (when it held basic-auth
+   credentials or a deployment token) and `X-Supermatrix-Token` (when it
+   held a deployment token) are removed before the request goes upstream.
 
 Sign-in attempts on the login page, and failed basic-auth attempts, are limited
 to 10 a minute per address.

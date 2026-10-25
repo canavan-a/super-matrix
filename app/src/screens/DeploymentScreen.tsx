@@ -109,7 +109,7 @@ const AUTH_HINT: Record<AuthMode, string> = {
   otp:
     "Only addresses on the list get in: they enter their email, get a 6-digit code, and get a session cookie. The service sees who it is in X-Supermatrix-User; its own fetch calls get a 401 with X-Supermatrix-Auth: expired when the session ends.",
   basic: "The browser's own username and password prompt. Handy for scripts and curl -u.",
-  token: 'Requests must carry a token: Authorization: Bearer <token>, or an X-Supermatrix-Token header.',
+  token: 'No sign-in page: only requests carrying one of the API tokens below get in.',
   none: 'Anyone with the address can reach it. No password.',
 };
 
@@ -399,8 +399,17 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
         </>
       )}
 
-      {form.authMode === 'token' && existing && <Tokens d={existing} />}
-      {form.authMode === 'token' && !existing && <Hint>Save first, then make tokens here.</Hint>}
+      {form.authMode !== 'none' && (
+        <>
+          <Label spaced>API tokens</Label>
+          <Hint>
+            {form.authMode === 'token'
+              ? 'The only way in: Authorization: Bearer <token>, or an X-Supermatrix-Token header.'
+              : 'For scripts and services: a request with a token (Authorization: Bearer <token>, or an X-Supermatrix-Token header) skips the sign-in above.'}
+          </Hint>
+          {existing ? <Tokens d={existing} tokenOnly={form.authMode === 'token'} /> : <Hint>Save first, then make tokens here.</Hint>}
+        </>
+      )}
 
       <Label spaced>IP allow list</Label>
       <Input
@@ -446,7 +455,7 @@ function certLine(d: Deployment): string {
   }
 }
 
-/** API tokens for a deployment in token mode: list, add (shown once), revoke. */
+/** API tokens for a deployment: list, add (shown once), revoke. */
 const TOKEN_EXPIRY_OPTIONS = [
   {value: 0, label: 'Never'},
   {value: 3600, label: '1 hour'},
@@ -464,7 +473,7 @@ function tokenMeta(t: DeploymentToken): string {
   return exp.getTime() <= Date.now() ? `expired ${exp.toLocaleString()} · ${used}` : `expires ${exp.toLocaleString()} · ${used}`;
 }
 
-function Tokens({d}: {d: Deployment}) {
+function Tokens({d, tokenOnly}: {d: Deployment; tokenOnly: boolean}) {
   const theme = useTheme();
   const styles = makeStyles(theme);
   const [name, setName] = useState('');
@@ -488,8 +497,7 @@ function Tokens({d}: {d: Deployment}) {
 
   return (
     <View style={styles.tokens}>
-      <Label spaced>Tokens</Label>
-      {d.tokens.length === 0 && <Hint>No tokens yet: nothing can get in.</Hint>}
+      {d.tokens.length === 0 && <Hint>{tokenOnly ? 'No tokens yet: nothing can get in.' : 'No tokens yet.'}</Hint>}
       {d.tokens.map(t => (
         <View key={t.id} style={styles.tokenRow}>
           <View style={styles.flex}>
@@ -514,7 +522,7 @@ function Tokens({d}: {d: Deployment}) {
       </View>
       <Label>New token expires</Label>
       <Chips options={TOKEN_EXPIRY_OPTIONS} value={expiresInS} onChange={setExpiresInS} />
-      <Hint>An expired token gets a 401 with X-Supermatrix-Auth: expired. Revoke and add a new one to rotate.</Hint>
+      <Hint>An expired token gets a 401 with X-Supermatrix-Auth: token_expired, never the sign-in page. Revoke and add a new one to rotate.</Hint>
       {fresh && (
         <>
           <Notice kind="success" title="New token: copy it now, it won't be shown again" />

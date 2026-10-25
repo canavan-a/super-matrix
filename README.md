@@ -20,9 +20,9 @@ wherever the services run. No open ports at home, no third party in the path.
   wildcard certificate, no DNS API keys.
 - **Auth in front, per deployment:** a Super Matrix sign-in page (its own
   password, the root password, or both), email codes for a list of addresses,
-  HTTP basic auth, API tokens (`Authorization: Bearer`, optionally expiring),
-  or public. An IP allow list works with any of
-  them. Credentials are checked and stripped at the server; the service never
+  HTTP basic auth, API tokens only, or public. API tokens
+  (`Authorization: Bearer`, optionally expiring) also get past any of the
+  sign-ins, for scripts. An IP allow list works with any of them. Credentials are checked and stripped at the server; the service never
   sees them.
 - **One root password** manages everything, from the app on Android or the web
   app the server serves.

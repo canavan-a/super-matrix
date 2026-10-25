@@ -208,13 +208,104 @@ func TestTokenExpiry(t *testing.T) {
 	e.api("PATCH", "/v1/deployments/"+d.ID, map[string]any{"enabled": true}, 200, nil)
 
 	res, _ := e.get("api.test", "/", bearer(short.Token))
-	if res.StatusCode != 401 || res.Header.Get("X-Supermatrix-Auth") != "expired" || !strings.Contains(res.Header.Get("WWW-Authenticate"), "invalid_token") {
+	if res.StatusCode != 401 || res.Header.Get("X-Supermatrix-Auth") != "token_expired" || !strings.Contains(res.Header.Get("WWW-Authenticate"), "invalid_token") {
 		t.Fatalf("expired token: %d %q", res.StatusCode, res.Header.Get("X-Supermatrix-Auth"))
 	}
 	if res, _ := e.get("api.test", "/", bearer(forever.Token)); res.StatusCode != 200 {
 		t.Fatalf("never-expiring token: %d", res.StatusCode)
 	}
-	if res, _ := e.get("api.test", "/", bearer("smt_nope")); res.StatusCode != 401 || res.Header.Get("X-Supermatrix-Auth") != "required" {
+	if res, _ := e.get("api.test", "/", bearer("smt_nope")); res.StatusCode != 401 || res.Header.Get("X-Supermatrix-Auth") != "token_invalid" {
 		t.Fatalf("unknown token: %d", res.StatusCode)
+	}
+	if res, _ := e.get("api.test", "/", nil); res.StatusCode != 401 || res.Header.Get("X-Supermatrix-Auth") != "required" {
+		t.Fatalf("no token: %d", res.StatusCode)
+	}
+
+	// In a sign-in mode an expired token still fails as a token, page loads
+	// included, rather than going to the sign-in page.
+	e.api("PATCH", "/v1/deployments/"+d.ID, map[string]any{"authMode": "login", "loginPassword": "deployment pw"}, 200, nil)
+	for _, hdr := range []http.Header{
+		{"Authorization": {"Bearer " + short.Token}, "Accept": {"text/html"}},
+		{"X-Supermatrix-Token": {short.Token}, "Accept": {"text/html"}},
+	} {
+		res, body := e.get("api.test", "/page", hdr)
+		if res.StatusCode != 401 || res.Header.Get("X-Supermatrix-Auth") != "token_expired" || !strings.Contains(body, `"auth":"token_expired"`) {
+			t.Fatalf("expired token in login mode: %d %q %s", res.StatusCode, res.Header.Get("X-Supermatrix-Auth"), body)
+		}
+	}
+	res, body := e.get("api.test", "/page", http.Header{"X-Supermatrix-Token": {"smt_nope"}, "Accept": {"text/html"}})
+	if res.StatusCode != 401 || res.Header.Get("X-Supermatrix-Auth") != "token_invalid" || !strings.Contains(body, `"auth":"token_invalid"`) {
+		t.Fatalf("unknown token header in login mode: %d %s", res.StatusCode, body)
+	}
+}
+
+// TestTokenOverride: a deployment's API token gets in whatever the auth
+// mode, instead of signing in; an unknown Bearer token is left for the
+// service.
+func TestTokenOverride(t *testing.T) {
+	e := newEnv(t)
+	relayID, stop := e.startRelay("laptop")
+	defer stop()
+	th, tp := target(t, false)
+	var d dep
+	e.api("POST", "/v1/deployments", map[string]any{
+		"relayId": relayID, "subdomain": "app", "targetHost": th, "targetPort": tp,
+		"authMode": "login", "loginPassword": "deployment pw",
+	}, 201, &d)
+	var tok struct{ ID, Token string }
+	e.api("POST", "/v1/deployments/"+d.ID+"/tokens", map[string]any{"name": "ci"}, 201, &tok)
+	bearer := http.Header{"Authorization": {"Bearer " + tok.Token}}
+
+	for _, mode := range []map[string]any{
+		{"authMode": "login"},
+		{"authMode": "otp", "otpEmails": []string{"ann@example.com"}},
+		{"authMode": "basic", "basicUser": "ann", "basicPassword": "open sesame"},
+		{"authMode": "token"},
+	} {
+		e.api("PATCH", "/v1/deployments/"+d.ID, mode, 200, nil)
+		if res, _ := e.get("app.test", "/", nil); res.StatusCode != 401 {
+			t.Fatalf("%v without credentials: %d", mode["authMode"], res.StatusCode)
+		}
+		res, body := e.get("app.test", "/", bearer)
+		if res.StatusCode != 200 || !strings.Contains(body, `"auth":""`) {
+			t.Fatalf("%v bearer: %d %s", mode["authMode"], res.StatusCode, body)
+		}
+		res, body = e.get("app.test", "/", http.Header{"X-Supermatrix-Token": {tok.Token}})
+		if res.StatusCode != 200 || !strings.Contains(body, `"token":""`) {
+			t.Fatalf("%v header: %d %s", mode["authMode"], res.StatusCode, body)
+		}
+		if res, _ := e.get("app.test", "/", http.Header{"X-Supermatrix-Token": {"smt_nope"}}); res.StatusCode != 401 {
+			t.Fatalf("%v unknown token header: %d", mode["authMode"], res.StatusCode)
+		}
+	}
+
+	// Basic mode: an unknown Bearer token isn't ours, so basic auth decides.
+	e.api("PATCH", "/v1/deployments/"+d.ID, map[string]any{"authMode": "basic"}, 200, nil)
+	res, _ := e.get("app.test", "/", http.Header{"Authorization": {"Bearer theirs"}})
+	if res.StatusCode != 401 || !strings.HasPrefix(res.Header.Get("WWW-Authenticate"), "Basic") {
+		t.Fatalf("basic with a foreign bearer: %d %q", res.StatusCode, res.Header.Get("WWW-Authenticate"))
+	}
+
+	// Login mode: a signed-in browser's own Bearer token reaches the service.
+	e.api("PATCH", "/v1/deployments/"+d.ID, map[string]any{"authMode": "login"}, 200, nil)
+	v := url.Values{"password": {"deployment pw"}}
+	login := e.req("POST", "app.test", "/_supermatrix/login", strings.NewReader(v.Encode()), form(v))
+	c := login.Cookies()[0]
+	res, body := e.get("app.test", "/", http.Header{"Cookie": {c.Name + "=" + c.Value}, "Authorization": {"Bearer theirs"}})
+	if res.StatusCode != 200 || !strings.Contains(body, `"auth":"Bearer theirs"`) {
+		t.Fatalf("foreign bearer with session: %d %s", res.StatusCode, body)
+	}
+
+	// Public: tokens play no part, headers go through untouched.
+	e.api("PATCH", "/v1/deployments/"+d.ID, map[string]any{"authMode": "none"}, 200, nil)
+	if res, body := e.get("app.test", "/", http.Header{"X-Supermatrix-Token": {"smt_nope"}}); res.StatusCode != 200 || !strings.Contains(body, `"token":"smt_nope"`) {
+		t.Fatalf("public: %d %s", res.StatusCode, body)
+	}
+
+	// Revoked: back to signing in.
+	e.api("PATCH", "/v1/deployments/"+d.ID, map[string]any{"authMode": "login"}, 200, nil)
+	e.api("DELETE", "/v1/deployments/"+d.ID+"/tokens/"+tok.ID, nil, 200, nil)
+	if res, _ := e.get("app.test", "/", bearer); res.StatusCode != 401 {
+		t.Fatalf("revoked token: %d", res.StatusCode)
 	}
 }
