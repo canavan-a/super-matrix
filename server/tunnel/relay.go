@@ -499,7 +499,7 @@ func (r *Relay) handle(st net.Conn) {
 		return
 	}
 	_ = st.SetDeadline(time.Time{})
-	pipe(st, conn)
+	Pipe(st, conn)
 }
 
 func dialTarget(t Target, timeout time.Duration) (net.Conn, error) {
@@ -526,8 +526,8 @@ func dialTarget(t Target, timeout time.Duration) (net.Conn, error) {
 	return tc, nil
 }
 
-// pipe copies both ways until either side is done, then closes both.
-func pipe(a, b net.Conn) {
+// Pipe copies both ways until either side is done, then closes both.
+func Pipe(a, b net.Conn) {
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
 		_, _ = io.Copy(dst, src)

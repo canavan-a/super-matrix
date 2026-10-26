@@ -1,5 +1,6 @@
 import {Deployment} from '../src/api';
-import {formFrom, formToInput} from '../src/screens/DeploymentScreen';
+import {formFrom, formToInput, protocolPatch} from '../src/screens/DeploymentScreen';
+import {groupByRelay} from '../src/screens/HomeScreen';
 import {relayInstall} from '../src/screens/RelaysScreen';
 import {deploymentHealth} from '../src/store';
 
@@ -25,6 +26,10 @@ const existing: Deployment = {
   hasBasicPassword: false,
   otpEmails: [],
   ipAllowlist: ['10.0.0.0/8', '203.0.113.7/32'],
+  sshCli: true,
+  sshShell: true,
+  sshUser: '',
+  sshHostKey: '',
   certStatus: 'ok',
   certExpiresAt: '2027-01-01T00:00:00Z',
   certError: '',
@@ -66,6 +71,9 @@ describe('deployment form', () => {
       basicUser: '',
       otpEmails: [],
       ipAllowlist: ['10.0.0.0/8', '203.0.113.7/32'],
+      sshCli: true,
+      sshShell: true,
+      sshUser: '',
     });
     expect('loginPassword' in input).toBe(false);
     expect('basicPassword' in input).toBe(false);
@@ -124,5 +132,49 @@ describe('deployment health', () => {
     });
     expect(deploymentHealth(existing, {r1: {...relay, health: {}}}).health).toBe('unknown');
     expect(deploymentHealth({...existing, enabled: false}, {r1: relay}).health).toBe('disabled');
+  });
+});
+
+describe('ssh deployments', () => {
+  it('suggests port 22 and leaves basic auth when switching to ssh', () => {
+    const f = {...formFrom(null, 'r1', 'dom1'), authMode: 'basic' as const};
+    expect(protocolPatch(f, 'ssh')).toEqual({protocol: 'ssh', targetPort: '22', authMode: 'login'});
+    expect(protocolPatch({...f, targetPort: '2222'}, 'ssh')).toEqual({protocol: 'ssh', authMode: 'login'});
+    expect(protocolPatch({...f, protocol: 'ssh', targetPort: '22'}, 'http')).toEqual({protocol: 'http', targetPort: ''});
+  });
+
+  it('sends the ssh settings and no HTTP-only ones', () => {
+    const f = {...formFrom({...existing, protocol: 'ssh', targetPort: 22, preserveHost: true, sshUser: 'ann', sshShell: false}), preserveHost: true};
+    expect(formToInput(f)).toMatchObject({
+      protocol: 'ssh',
+      targetPort: 22,
+      tlsSkipVerify: false,
+      sni: '',
+      preserveHost: false,
+      sshCli: true,
+      sshShell: false,
+      sshUser: 'ann',
+    });
+  });
+});
+
+describe('home grouped by relay', () => {
+  const relay = (id: string, name: string) =>
+    ({id, name, createdAt: '', lastSeenAt: null, lastIp: '', version: '', hostname: '', online: true, deployments: 0, transport: '', fallback: ''}) as const;
+
+  it('groups under relays by name, empty relays included, orphans last', () => {
+    const ds = [
+      {...existing, id: 'a', relayId: 'r2'},
+      {...existing, id: 'b', relayId: 'r1'},
+      {...existing, id: 'c', relayId: 'gone'},
+      {...existing, id: 'd', relayId: 'r2'},
+    ];
+    const groups = groupByRelay(ds, [relay('r2', 'pi'), relay('r1', 'homelab'), relay('r3', 'laptop')]);
+    expect(groups.map(g => [g.relay?.name ?? null, g.items.map(d => d.id)])).toEqual([
+      ['homelab', ['b']],
+      ['laptop', []],
+      ['pi', ['a', 'd']],
+      [null, ['c']],
+    ]);
   });
 });

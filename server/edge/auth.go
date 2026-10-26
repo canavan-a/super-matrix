@@ -110,13 +110,19 @@ func sessionTTL(ent *registry.Entry) time.Duration {
 	return 7 * 24 * time.Hour
 }
 
-func (e *Edge) makeCookie(ent *registry.Entry, kind, email string) *http.Cookie {
-	exp := e.now().Add(sessionTTL(ent))
+// mintSession is a signed session value: what the cookie holds, and what the
+// CLI sends back in a Cookie header.
+func (e *Edge) mintSession(ent *registry.Entry, kind, email string, exp time.Time) string {
 	payload := ent.ID + "|" + strconv.FormatInt(exp.Unix(), 10) + "|" + kind
 	if kind == "o" {
 		payload += "|" + email
 	}
-	v := base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + e.sign(payload, e.sessionEpoch(ent, kind, email))
+	return base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + e.sign(payload, e.sessionEpoch(ent, kind, email))
+}
+
+func (e *Edge) makeCookie(ent *registry.Entry, kind, email string) *http.Cookie {
+	exp := e.now().Add(sessionTTL(ent))
+	v := e.mintSession(ent, kind, email, exp)
 	keep := sessionTTL(ent) + cookieGrace
 	return &http.Cookie{
 		Name: e.cookieName(), Value: v, Path: "/", Expires: exp.Add(cookieGrace), MaxAge: int(keep.Seconds()),
@@ -132,6 +138,8 @@ func (e *Edge) clearCookie() *http.Cookie {
 type session struct {
 	Email   string // otp sessions only
 	Expires time.Time
+	// Kind is how it signed in: "d", "r" or "o" (see sessionEpoch).
+	Kind string
 }
 
 // session checks the request's cookie against ent: authOK, authExpired (a
@@ -180,7 +188,7 @@ func (e *Edge) session(r *http.Request, ent *registry.Entry) (session, string) {
 	if !hmac.Equal([]byte(mac), []byte(want)) {
 		return session{}, authRequired
 	}
-	s := session{Email: email, Expires: time.Unix(exp, 0)}
+	s := session{Email: email, Expires: time.Unix(exp, 0), Kind: kind}
 	if !e.now().Before(s.Expires) {
 		return s, authExpired
 	}
@@ -378,8 +386,12 @@ func (e *Edge) checkBasic(ent *registry.Entry, user, pass string) bool {
 	return true
 }
 
-// safeNext keeps post-login redirects on this host.
+// safeNext keeps post-login redirects on this host, and off our own routes
+// except the CLI consent page (an ssh deployment's sign-in leads there).
 func safeNext(next string) string {
+	if strings.HasPrefix(next, "/_supermatrix/cli?") {
+		return next
+	}
 	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") || strings.HasPrefix(next, "/_supermatrix/") {
 		return "/"
 	}

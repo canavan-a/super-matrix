@@ -4,6 +4,10 @@
 #   sudo deploy/install.sh server          # server + web app (needs go, npm)
 #   sudo deploy/install.sh server --no-web # server only (needs go)
 #   sudo deploy/install.sh relay [TOKEN]   # relay (needs go); TOKEN from the app
+#   sudo deploy/install.sh client          # the supermatrix CLI for SSH deployments (needs go)
+#   sudo deploy/install.sh forward NAME HOST [--listen ADDR] [TOKEN]
+#                                          # a service keeping a local port open to HOST
+#                                          # (an SSH deployment); TOKEN is one of its API tokens
 #
 # Re-running upgrades the binaries and keeps existing config and secrets.
 # Builds from this checkout, so `git pull` first to upgrade.
@@ -17,7 +21,8 @@ die() { echo "error: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 is required ($2)"; }
 
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo)"
-[ $# -ge 1 ] || die "usage: install.sh server [--no-web] | relay [TOKEN]"
+usage="usage: install.sh server [--no-web] | relay [TOKEN] | client | forward NAME HOST [--listen ADDR] [TOKEN]"
+[ $# -ge 1 ] || die "$usage"
 need go "https://go.dev/dl/, 1.26+"
 need systemctl "systemd"
 
@@ -112,7 +117,48 @@ relay)
   fi
   ;;
 
+client)
+  build supermatrix
+  echo "installed $bin/supermatrix. In ~/.ssh/config, for each SSH deployment:"
+  echo "  Host ssh-box.example.com"
+  echo "    ProxyCommand supermatrix access %h"
+  ;;
+
+forward)
+  [ $# -ge 3 ] || die "$usage"
+  name="$2" host="$3" listen="127.0.0.1:2222" token=""
+  shift 3
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    --listen) listen="${2:?--listen needs an address}"; shift 2 ;;
+    *) token="$1"; shift ;;
+    esac
+  done
+  [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || die "NAME: letters, digits, - and _ only"
+  case "$host" in
+  http://* | https://*) url="$host" ;;
+  *) url="https://$host" ;;
+  esac
+  build supermatrix
+  printf '# Installed by deploy/install.sh forward; see forward.env.example.\nSUPERMATRIX_URL=%s\nSUPERMATRIX_LISTEN=%s\n' "$url" "$listen" > "$etc/forward-$name.env"
+  if [ -n "$token" ]; then
+    umask 077
+    printf '%s\n' "$token" > "$etc/forward-$name-token"
+    chmod 0600 "$etc/forward-$name-token"
+  fi
+  install -m 0644 "$repo/deploy/supermatrix-forward@.service" /etc/systemd/system/
+  systemctl daemon-reload
+  if [ -f "$etc/forward-$name-token" ]; then
+    systemctl enable "supermatrix-forward@$name" >/dev/null 2>&1 || true
+    systemctl restart "supermatrix-forward@$name"
+    echo "supermatrix-forward@$name: $listen → $url"
+  else
+    echo "Put an API token for $host (made in the app) in $etc/forward-$name-token, then:"
+    echo "  systemctl enable --now supermatrix-forward@$name"
+  fi
+  ;;
+
 *)
-  die "usage: install.sh server [--no-web] | relay [TOKEN]"
+  die "$usage"
   ;;
 esac

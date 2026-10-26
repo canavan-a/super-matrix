@@ -1,12 +1,13 @@
 import React, {useRef} from 'react';
 import {ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
-import {AuthMode, Deployment, RelayState} from '../api';
+import {AuthMode, Deployment, Relay, RelayState} from '../api';
 import {Icon, IconName} from '../components/Icon';
 import {SpringyPull} from '../components/SpringyPull';
-import {Button, Dot} from '../components/ui';
+import {Button, Chips, Dot} from '../components/ui';
 import {isFallback, transportBadge} from '../link';
 import {Route} from '../routes';
+import {settingsStore, useSettings} from '../settings';
 import {deploymentHealth, Health, refresh, useStore} from '../store';
 import {Theme, useTheme} from '../theme';
 
@@ -50,6 +51,7 @@ export function HomeScreen({onNavigate}: {onNavigate: (r: Route) => void}): Reac
   const tls = useStore(s => s.info?.tls ?? true);
   const info = useStore(s => s.info);
   const scrollY = useRef(0);
+  const groupBy = useSettings().homeGroupBy;
 
   if (!loaded) {
     return (
@@ -60,6 +62,18 @@ export function HomeScreen({onNavigate}: {onNavigate: (r: Route) => void}): Reac
   }
 
   const relayName = (id: string) => relays.find(r => r.id === id)?.name ?? 'unknown relay';
+  const row = (d: Deployment) => (
+    <DeploymentRow
+      key={d.id}
+      d={d}
+      relay={relayName(d.relayId)}
+      health={deploymentHealth(d, live)}
+      link={live[d.relayId]}
+      fallback={isFallback(info, live[d.relayId])}
+      tls={tls}
+      onPress={() => onNavigate({name: 'deployment', id: d.id})}
+    />
+  );
 
   return (
     <SpringyPull atTop={() => scrollY.current <= 0} onRefresh={refresh}>
@@ -94,18 +108,25 @@ export function HomeScreen({onNavigate}: {onNavigate: (r: Route) => void}): Reac
           </View>
         ) : (
           <>
-            {deployments.map(d => (
-              <DeploymentRow
-                key={d.id}
-                d={d}
-                relay={relayName(d.relayId)}
-                health={deploymentHealth(d, live)}
-                link={live[d.relayId]}
-                fallback={isFallback(info, live[d.relayId])}
-                tls={tls}
-                onPress={() => onNavigate({name: 'deployment', id: d.id})}
-              />
-            ))}
+            <Chips
+              options={[
+                {value: 'none', label: 'All'},
+                {value: 'relay', label: 'By relay'},
+              ]}
+              value={groupBy}
+              onChange={v => settingsStore.update({homeGroupBy: v})}
+            />
+            <View style={styles.list}>
+              {groupBy === 'relay'
+                ? groupByRelay(deployments, relays).map(g => (
+                    <View key={g.relay?.id ?? 'unknown'} style={styles.group}>
+                      <RelayHeader name={g.relay?.name ?? 'Unknown relay'} link={g.relay ? live[g.relay.id] : undefined} count={g.items.length} />
+                      {g.items.length === 0 && <Text style={styles.groupEmpty}>No deployments</Text>}
+                      {g.items.map(row)}
+                    </View>
+                  ))
+                : deployments.map(row)}
+            </View>
             <Button
               label="New deployment"
               icon="plus"
@@ -117,6 +138,32 @@ export function HomeScreen({onNavigate}: {onNavigate: (r: Route) => void}): Reac
         )}
       </ScrollView>
     </SpringyPull>
+  );
+}
+
+/** Deployments under each relay, relays by name; relays with none get an empty group, and deployments on a relay that's gone come last. */
+export function groupByRelay(deployments: Deployment[], relays: Relay[]): {relay: Relay | null; items: Deployment[]}[] {
+  const groups = [...relays]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(relay => ({relay: relay as Relay | null, items: deployments.filter(d => d.relayId === relay.id)}));
+  const orphans = deployments.filter(d => !relays.some(r => r.id === d.relayId));
+  if (orphans.length > 0) groups.push({relay: null, items: orphans});
+  return groups;
+}
+
+function RelayHeader({name, link, count}: {name: string; link: RelayState | undefined; count: number}) {
+  const theme = useTheme();
+  const styles = makeStyles(theme);
+  return (
+    <View style={styles.groupHeader} accessibilityRole="header">
+      <Dot color={link ? theme.success : theme.textMuted} />
+      <Text style={styles.groupName} numberOfLines={1}>
+        {name}
+      </Text>
+      <Text style={styles.groupMeta} numberOfLines={1}>
+        {[link ? transportBadge(link) : 'offline', count === 1 ? '1 deployment' : `${count} deployments`].filter(Boolean).join(' · ')}
+      </Text>
+    </View>
   );
 }
 
@@ -229,6 +276,12 @@ function makeStyles(theme: Theme) {
     badgeWarnText: {color: theme.danger},
     detail: {fontSize: 11, color: theme.textMuted, flexShrink: 1},
     newButton: {marginTop: 8, alignSelf: 'center'},
+    list: {marginTop: 12},
+    group: {marginBottom: 12},
+    groupHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 4, paddingBottom: 8},
+    groupName: {fontSize: 13, fontWeight: '700', color: theme.text, flexShrink: 1},
+    groupMeta: {fontSize: 12, color: theme.textMuted, flexShrink: 1},
+    groupEmpty: {fontSize: 12, color: theme.textMuted, paddingHorizontal: 4, paddingBottom: 4},
     empty: {alignItems: 'center', paddingVertical: 48, paddingHorizontal: 24, gap: 8},
     emptyTitle: {fontSize: 16, fontWeight: '700', color: theme.text, marginTop: 4},
     emptyText: {fontSize: 13, color: theme.textMuted, textAlign: 'center', lineHeight: 19, maxWidth: 360},

@@ -1,8 +1,11 @@
-# One image for the server, the relay and the admin CLI, with the web app.
+# One image for the server, the relay, the admin CLI and the supermatrix SSH
+# client, with the web app.
 #
 #   docker build -t supermatrix .
 #   docker run ... supermatrix                                  # the server
 #   docker run ... --entrypoint supermatrix-relay supermatrix   # a relay
+#   docker run -i --rm --entrypoint supermatrix -e SUPERMATRIX_TOKEN=smt_… supermatrix access ssh-box.example.com
+#                                                               # the SSH client (or `forward --listen 0.0.0.0:2222`)
 #
 # The server listens on 8080 (HTTP: ACME challenges + redirects), 8443/tcp
 # (HTTPS) and 8443/udp (QUIC), as a non-root user; publish them as 80, 443/tcp

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,6 +46,10 @@ type deploymentDTO struct {
 	HasBasicPassword bool       `json:"hasBasicPassword"`
 	OTPEmails        []string   `json:"otpEmails"`
 	IPAllowlist      []string   `json:"ipAllowlist"`
+	SSHCLI           bool       `json:"sshCli"`
+	SSHShell         bool       `json:"sshShell"`
+	SSHUser          string     `json:"sshUser"`
+	SSHHostKey       string     `json:"sshHostKey"`
 	CertStatus       string     `json:"certStatus"`
 	CertExpiresAt    *time.Time `json:"certExpiresAt"`
 	CertError        string     `json:"certError"`
@@ -68,6 +73,7 @@ func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []databa
 		AuthMode: d.AuthMode, HasLoginPassword: d.LoginPassHash != "", AllowRootLogin: d.AllowRootLogin,
 		SessionTTLS: d.SessionTTLS, BasicUser: d.BasicUser, HasBasicPassword: d.BasicPassHash != "",
 		OTPEmails: splitAllowlist(d.OTPEmails), IPAllowlist: splitAllowlist(d.IPAllowlist), CertStatus: d.CertStatus, CertExpiresAt: d.CertExpiresAt,
+		SSHCLI: d.SSHCLI, SSHShell: d.SSHShell, SSHUser: d.SSHUser, SSHHostKey: d.SSHHostKey,
 		CertError: d.CertError, Tokens: []tokenDTO{}, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
 	}
 	for _, t := range toks {
@@ -157,6 +163,11 @@ type deploymentInput struct {
 	BasicPassword  *string   `json:"basicPassword"`
 	OTPEmails      *[]string `json:"otpEmails"`
 	IPAllowlist    *[]string `json:"ipAllowlist"`
+	SSHCLI         *bool     `json:"sshCli"`
+	SSHShell       *bool     `json:"sshShell"`
+	SSHUser        *string   `json:"sshUser"`
+	// SSHHostKey can only be cleared (""), so the shell trusts the next key.
+	SSHHostKey *string `json:"sshHostKey"`
 }
 
 var (
@@ -194,6 +205,9 @@ func (a *API) apply(d *database.Deployment, in deploymentInput) error {
 	if in.Subdomain != nil {
 		d.Subdomain = strings.ToLower(strings.TrimSpace(*in.Subdomain))
 	}
+	// A new target, or a new relay reaching it, most likely has another
+	// host key.
+	before := d.RelayID + "\x00" + d.TargetHost + "\x00" + strconv.Itoa(d.TargetPort)
 	if in.Protocol != nil {
 		d.Protocol = *in.Protocol
 	}
@@ -202,6 +216,26 @@ func (a *API) apply(d *database.Deployment, in deploymentInput) error {
 	}
 	if in.TargetPort != nil {
 		d.TargetPort = *in.TargetPort
+	} else if d.Protocol == database.ProtocolSSH && d.TargetPort == 0 {
+		d.TargetPort = 22
+	}
+	if in.SSHCLI != nil {
+		d.SSHCLI = *in.SSHCLI
+	}
+	if in.SSHShell != nil {
+		d.SSHShell = *in.SSHShell
+	}
+	if in.SSHUser != nil {
+		d.SSHUser = strings.TrimSpace(*in.SSHUser)
+	}
+	if in.SSHHostKey != nil {
+		if *in.SSHHostKey != "" {
+			return inputError("the host key can only be reset (\"\")")
+		}
+		d.SSHHostKey = ""
+	}
+	if d.RelayID+"\x00"+d.TargetHost+"\x00"+strconv.Itoa(d.TargetPort) != before {
+		d.SSHHostKey = ""
 	}
 	if in.TLSSkipVerify != nil {
 		d.TLSSkipVerify = *in.TLSSkipVerify
@@ -211,6 +245,10 @@ func (a *API) apply(d *database.Deployment, in deploymentInput) error {
 	}
 	if in.PreserveHost != nil {
 		d.PreserveHost = *in.PreserveHost
+	}
+	if d.Protocol == database.ProtocolSSH {
+		// Only for proxying HTTP(S).
+		d.TLSSkipVerify, d.SNI, d.PreserveHost = false, "", false
 	}
 	if in.Enabled != nil {
 		d.Enabled = *in.Enabled
@@ -289,8 +327,12 @@ func (a *API) apply(d *database.Deployment, in deploymentInput) error {
 		return inputError("subdomain must be lowercase letters, digits and dashes")
 	case host == a.cfg.AdminHost:
 		return inputError("that is the admin host")
-	case d.Protocol != "http" && d.Protocol != "https":
-		return inputError(`protocol must be "http" or "https"`)
+	case d.Protocol != database.ProtocolHTTP && d.Protocol != database.ProtocolHTTPS && d.Protocol != database.ProtocolSSH:
+		return inputError(`protocol must be "http", "https" or "ssh"`)
+	case d.Protocol == database.ProtocolSSH && d.AuthMode == database.AuthBasic:
+		return inputError("ssh deployments can't use basic auth")
+	case len(d.SSHUser) > 64 || strings.ContainsFunc(d.SSHUser, func(r rune) bool { return r < 32 || r == 127 || r == ' ' }):
+		return inputError("SSH username: at most 64 characters, no spaces")
 	case d.TargetHost == "" || !hostRe.MatchString(d.TargetHost):
 		return inputError("target host must be a hostname or IP address")
 	case d.TargetPort < 1 || d.TargetPort > 65535:
@@ -352,7 +394,7 @@ func (a *API) createDeployment(c *gin.Context) {
 	}
 	now := a.now()
 	d := database.Deployment{
-		ID: database.NewID(), Protocol: "http", Enabled: true, AuthMode: database.AuthLogin,
+		ID: database.NewID(), Protocol: database.ProtocolHTTP, Enabled: true, AuthMode: database.AuthLogin, SSHCLI: true, SSHShell: true,
 		AllowRootLogin: true, SessionTTLS: 7 * 24 * 3600, CertStatus: database.CertPending,
 		CreatedAt: now, UpdatedAt: now,
 	}

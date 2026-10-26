@@ -82,6 +82,14 @@
             exec ${pkgs.go}/bin/go run ./cmd/supermatrix-relay
           '';
 
+          # The SSH client, e.g. as a ProxyCommand against the dev server:
+          #   ssh -o ProxyCommand="supermatrix access --url http://%h: %h" you@box.localhost
+          supermatrix = script "supermatrix" ''
+            set -e
+            cd "${repoRoot}/server"
+            exec ${pkgs.go}/bin/go run ./cmd/supermatrix "$@"
+          '';
+
           # Same database as the dev server above.
           supermatrix-admin = script "supermatrix-admin" ''
             set -e
@@ -131,6 +139,7 @@
             echo "  run-relay <token> # a relay against the dev server (token from the app)"
             echo "  db-reset          # delete the local database"
             echo "  supermatrix-admin # stats | list | revoke-sessions"
+            echo "  supermatrix       # the SSH client (access / forward / login), e.g. as a ProxyCommand"
             echo "  run-app-web       # the app's web target via Vite on :5173"
             echo "  run-app-web-build # builds app/dist, which the dev server then serves"
             echo "  run-app-android   # the app on a connected device/emulator (needs the system Android SDK)"
@@ -157,6 +166,7 @@
               dev-down
               run-relay
               supermatrix-admin
+              supermatrix
               run-app-web
               run-app-web-build
               run-app-android
@@ -175,7 +185,8 @@
       nixosModules = rec {
         server = import ./nix/server.nix { inherit self; };
         relay = import ./nix/relay.nix { inherit self; };
-        default = { imports = [ server relay ]; };
+        client = import ./nix/client.nix { inherit self; };
+        default = { imports = [ server relay client ]; };
       };
     in
     perSystem // { inherit nixosModules; };

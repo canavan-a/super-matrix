@@ -22,6 +22,7 @@ h1{font-size:18px;margin:0 0 6px}
 p{color:var(--muted);font-size:14px;line-height:1.45;margin:0 0 18px;word-break:break-word}
 .host{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text)}
 input{width:100%;font:inherit;font-size:16px;padding:11px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin:0 0 12px}
+textarea,pre{width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin:0 0 12px;text-align:left;white-space:pre-wrap;word-break:break-all;resize:none}
 input:focus{outline:2px solid var(--primary);outline-offset:-1px}
 button{width:100%;font:inherit;font-weight:600;font-size:15px;padding:11px;border-radius:8px;border:0;background:var(--primary);color:var(--primaryText);cursor:pointer}
 .err{background:var(--dangerBg);color:var(--danger);border-radius:8px;padding:9px 10px;font-size:14px;margin:0 0 12px}
@@ -57,6 +58,19 @@ var pages = template.Must(template.New("").Parse(`
 <input type="text" name="code" inputmode="numeric" pattern="[0-9 ]*" maxlength="8" placeholder="123456" autocomplete="one-time-code" autofocus required aria-label="Code">
 <button type="submit">Sign in</button></form>
 <a class="alt" href="/_supermatrix/login?next={{.Next}}">Use a different email or send a new code</a>{{template "foot"}}{{end}}
+
+{{define "cli"}}{{template "head" .}}<h1>Allow terminal access?</h1><p>The supermatrix CLI on your computer wants to connect to <span class="host">{{.Host}}</span>, signed in as {{.Who}}. Only allow this if you just ran it.</p>
+<form method="post" action="/_supermatrix/cli"><input type="hidden" name="port" value="{{.Port}}"><input type="hidden" name="state" value="{{.State}}">
+<button type="submit">Allow</button></form>{{template "foot"}}{{end}}
+
+{{define "cli-code"}}{{template "head" .}}<h1>{{.Title}}</h1><p>The CLI is waiting for this. Treat it like a password.</p>
+<textarea readonly rows="6" aria-label="Session">{{.Code}}</textarea>{{template "foot"}}{{end}}
+
+{{define "ssh-info"}}{{template "head" .}}<h1>SSH</h1><p><span class="host">{{.Host}}</span> is an SSH deployment.</p>
+{{if .CLI}}<p>Install the supermatrix CLI, then add this to <span class="host">~/.ssh/config</span>:</p>
+<pre>Host {{.Host}}
+  ProxyCommand supermatrix access %h</pre>{{else}}<p>Terminal access is off for it.</p>{{end}}
+{{if .SignOut}}<a class="alt" href="/_supermatrix/logout">Sign out</a>{{end}}{{template "foot"}}{{end}}
 `))
 
 type pageData struct {
@@ -68,14 +82,28 @@ type pageData struct {
 	// Notice is a neutral note above the form (e.g. the session expired).
 	Notice string
 	Email  string
+	// SSH pages: the CLI's loopback port and nonce, who it signs in as,
+	// the session to paste, and whether CLI access and signing out apply.
+	Port    int
+	State   string
+	Who     string
+	Code    string
+	CLI     bool
+	SignOut bool
 }
 
 func render(w http.ResponseWriter, status int, name string, d pageData) {
+	renderCSP(w, status, name, d, "form-action 'self'")
+}
+
+// renderCSP is render with a different form-action, for the CLI consent
+// page, whose answer redirects to the CLI's loopback listener.
+func renderCSP(w http.ResponseWriter, status int, name string, d pageData, formAction string) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Frame-Options", "DENY")
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; "+formAction+"; frame-ancestors 'none'")
 	w.WriteHeader(status)
 	_ = pages.ExecuteTemplate(w, name, d)
 }

@@ -9,6 +9,8 @@ server/*.db
 /server/supermatrix-server
 /server/supermatrix-relay
 /server/supermatrix-admin
+/server/supermatrix
+release/client-dist/
 result
 result-*
 .direnv/

@@ -1,4 +1,4 @@
-| `GET /v1/status` | live relay state: `{relays: {<id>: {online, connectedAt, remote, version, hostname, health, transport, fallback, rttMs, bytesSent, bytesReceived, packetsLost, streams}}}` || `GET /v1/info` | admin host, base domain, TLS on/off, version, the URL relays should use, the QUIC endpoint (or null) |# Super Matrix protocol
+# Super Matrix protocol
 
 How the server, relays, visitors and the app talk. The code is the reference:
 `server/tunnel` (relay link), `server/edge` (routing and auth), `server/api`
@@ -36,6 +36,11 @@ A new or renamed deployment's certificate is fetched at once in the background
 visitor. Every host is warmed again at startup and every 12 hours, which also
 retries failures and refreshes the expiry dates the app shows (`cert_status`,
 `cert_expires_at`). autocert renews certificates 30 days before they expire.
+
+With TLS on, every response from the admin host and the deployments carries
+`Strict-Transport-Security: max-age=31536000` (no `includeSubDomains`: other
+names under a domain may not be this server's), unless the service behind a
+deployment sends its own.
 
 ## The relay link
 
@@ -215,6 +220,59 @@ Checked in this order:
 Sign-in attempts on the login page, and failed basic-auth attempts, are limited
 to 10 a minute per address.
 
+## SSH deployments
+
+A deployment with protocol `ssh` isn't proxied as HTTP. The relay side is the
+same as ever: the target (`host:port` on the relay's network, usually
+`127.0.0.1:22`) is dialed as plain TCP and the data stream is a byte pipe, so
+any relay version serves it. The edge checks the allow list and auth mode as
+for any deployment (`none`, `login`, `otp` or `token`; `basic` is refused),
+then serves these on the deployment's host:
+
+| Path | |
+|---|---|
+| `/_supermatrix/login`, `verify`, `logout`, `session` | the sign-in pages, as above |
+| `/_supermatrix/cli?port=P&state=S` | the CLI's consent page (needs a session) |
+| `/_supermatrix/ssh` | WebSocket: binary messages are a raw pipe to the target. Off with `sshCli` |
+| `/` | the browser shell, or with `sshShell` off a page showing the ssh config |
+| `/_supermatrix/shell` | the browser shell's WebSocket. Off with `sshShell` |
+| `/_supermatrix/assets/*` | the shell's script and the vendored xterm.js (public) |
+
+Both WebSockets refuse an `Origin` other than the deployment's own host (the
+CLI sends none). Relay and target errors on `/_supermatrix/ssh` are a 502
+with `{"error"}` before the upgrade.
+
+**The CLI** (`server/cmd/supermatrix`) dials `wss://HOST/_supermatrix/ssh`
+with its saved session as the cookie (`Cookie: __Host-supermatrix=…`), or
+with an API token in `X-Supermatrix-Token`. A 401 with a `login` URL sends
+it through the sign-in:
+
+1. It listens on `127.0.0.1:<random port>` and opens
+   `/_supermatrix/cli?port=<port>&state=<random>` in the browser. Signed-out
+   browsers go through the sign-in page first, which returns there.
+2. The page asks to allow terminal access as the signed-in user. Allowing
+   (a same-origin POST) mints a session value exactly like the cookie (same
+   kind, address and expiry as the browser's session) and redirects to
+   `http://127.0.0.1:<port>/callback?state=…&session=…`. With `port=0` it
+   shows the value to paste instead.
+3. The CLI checks `state`, saves the value in
+   `$SUPERMATRIX_CONFIG_DIR/sessions.json` (0600) and dials again.
+
+Because it is the cookie value, a CLI session ends like a browser one:
+when it expires, when the password changes, when root login is turned off or
+when the address leaves the email list. `supermatrix forward` serves the same
+pipe on a local TCP port, one WebSocket per accepted connection.
+
+**The browser shell** is xterm.js on `/_supermatrix/shell`. Binary messages
+are terminal bytes; text messages are JSON, `{"type":"resize","cols","rows"}`
+from the page and `{"type":"exit","message"}` from the server. The server is
+the SSH client (`x/crypto/ssh`) over a data stream from the relay. It asks in
+the terminal for a username (suggesting `sshUser`), then for a password or
+keyboard-interactive answers, and keeps none of them. The host key is trusted
+the first time (saved as `ssh_host_key`) and must match after that. Changing
+the relay or target forgets it, as does PATCH `sshHostKey: ""`. The shell
+closes when the Super Matrix session ends.
+
 ## Admin API
 
 The admin host serves this API; every route except `login`, `relay/*` (relay
@@ -224,13 +282,13 @@ tokens) and `ws` needs `Authorization: Bearer sms_…`.
 |---|---|
 | `POST /v1/login {password}` | root password → `{token, expiresAt}` (30 days); 10 attempts a minute per address |
 | `POST /v1/logout` | ends this session |
-| `GET /v1/info` | admin host, base domain, TLS on/off, version, the URL relays should use |
-| `GET /v1/status` | live relay state: `{relays: {<id>: {online, connectedAt, remote, version, hostname, health}}}` |
+| `GET /v1/info` | admin host, base domain, TLS on/off, version, the URL relays should use, the QUIC endpoint (or null) |
+| `GET /v1/status` | live relay state: `{relays: {<id>: {online, connectedAt, remote, version, hostname, health, transport, fallback, rttMs, bytesSent, bytesReceived, packetsLost, streams}}}` |
 | `GET/POST /v1/relays`, `PATCH/DELETE /v1/relays/:id` | relays; `POST` returns the token once. Deleting a relay that still has deployments is refused |
 | `POST /v1/relays/:id/rotate` | new token (shown once); the old one stops working and the relay is disconnected |
 | `GET/POST /v1/domains {name}`, `DELETE /v1/domains/:id` | domains: `name` is `*.example.com` (wildcard) or `status.foo.org` (exact). A domain in use can't be deleted |
 | `GET /v1/domains/:id/dns` | whether the domain (for a wildcard, a random name under it) resolves to the same addresses as the admin host: `{ok, probe, addresses, expected, detail}` |
-| `GET/POST /v1/deployments`, `GET/PATCH/DELETE /v1/deployments/:id` | deployments (`domainId` + `subdomain`, which is ignored on an exact domain). Passwords go in as plaintext (`loginPassword`, `basicPassword`, at least 8 characters; `""` clears one) and are stored as bcrypt hashes |
+| `GET/POST /v1/deployments`, `GET/PATCH/DELETE /v1/deployments/:id` | deployments (`domainId` + `subdomain`, which is ignored on an exact domain). Passwords go in as plaintext (`loginPassword`, `basicPassword`, at least 8 characters; `""` clears one) and are stored as bcrypt hashes. `protocol` is `http`, `https` or `ssh`; ssh deployments also have `sshCli`, `sshShell`, `sshUser` and the read-only `sshHostKey` (PATCH `""` forgets it) |
 | `POST /v1/deployments/:id/tokens {name, expiresInS?}`, `DELETE …/tokens/:tid` | API tokens; `POST` returns the token once. `expiresInS` 0 or missing never expires |
 
 Sessions are tied to a fingerprint of the root password, so changing the

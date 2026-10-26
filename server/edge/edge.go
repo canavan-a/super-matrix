@@ -38,6 +38,9 @@ type Edge struct {
 	TokenUsed func(tokenID string)
 	// Mail sends email-code sign-in codes; nil turns that sign-in off.
 	Mail Mailer
+	// HostKeySeen saves an ssh deployment's host key the first time the
+	// browser shell meets it.
+	HostKeySeen func(deploymentID, fingerprint string)
 
 	key        []byte
 	now        func() time.Time
@@ -75,9 +78,10 @@ func New(cfg config.Config, reg *registry.Registry, hub *tunnel.Hub, cookieKey [
 		ForceAttemptHTTP2: false,
 	}
 	e.proxy = &httputil.ReverseProxy{
-		Rewrite:      e.rewrite,
-		Transport:    e.transport,
-		ErrorHandler: e.proxyError,
+		Rewrite:        e.rewrite,
+		Transport:      e.transport,
+		ErrorHandler:   e.proxyError,
+		ModifyResponse: e.modifyResponse,
 	}
 	return e
 }
@@ -88,6 +92,10 @@ func (e *Edge) Changed() { e.transport.CloseIdleConnections() }
 
 func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host := guard.StripPort(r.Host)
+	if e.cfg.TLSOn() {
+		// Plain http only ever redirects, so browsers may as well remember.
+		w.Header().Set(hstsHeader, hstsValue)
+	}
 	if host == e.cfg.AdminHost {
 		e.Admin.ServeHTTP(w, r)
 		return
@@ -104,6 +112,10 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only the edge says who signed in.
 	r.Header.Del(UserHeader)
+	if ent.Protocol == database.ProtocolSSH {
+		e.serveSSH(w, r, ent, ip)
+		return
+	}
 	if (ent.AuthMode == database.AuthLogin || ent.AuthMode == database.AuthOTP) && strings.HasPrefix(r.URL.Path, "/_supermatrix/") {
 		e.loginRoutes(w, r, ent, ip)
 		return
@@ -113,6 +125,8 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := context.WithValue(r.Context(), ctxKey{}, ent)
 	ctx = context.WithValue(ctx, clientIPKey{}, ip)
+	// The service may send its own; modifyResponse adds ours otherwise.
+	w.Header().Del(hstsHeader)
 	e.proxy.ServeHTTP(w, r.WithContext(ctx))
 }
 
@@ -177,4 +191,18 @@ func (e *Edge) proxyError(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		message(w, http.StatusBadGateway, "Bad gateway", "The service didn't answer properly.")
 	}
+}
+
+// HSTS on everything served over https, without includeSubDomains: other
+// names under a domain may not be ours.
+const (
+	hstsHeader = "Strict-Transport-Security"
+	hstsValue  = "max-age=31536000"
+)
+
+func (e *Edge) modifyResponse(res *http.Response) error {
+	if e.cfg.TLSOn() && res.Header.Get(hstsHeader) == "" {
+		res.Header.Set(hstsHeader, hstsValue)
+	}
+	return nil
 }

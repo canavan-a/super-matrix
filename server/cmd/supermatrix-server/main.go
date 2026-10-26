@@ -48,6 +48,7 @@ func main() {
 	a := api.New(db, cfg, reg, hub)
 	e := edge.New(cfg, reg, hub, key, a.Handler())
 	e.TokenUsed = a.TokenUsed
+	e.HostKeySeen = a.SSHHostKeySeen
 	e.Mail = mail.New(cfg)
 	a.AfterChange = e.Changed
 	if !cfg.SMTPOn() && cfg.TLSOn() {

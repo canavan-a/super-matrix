@@ -50,6 +50,8 @@ export async function request<T>(server: string, method: string, path: string, t
 
 export type AuthMode = 'none' | 'login' | 'otp' | 'basic' | 'token';
 export type CertStatus = 'pending' | 'ok' | 'error' | 'off';
+/** What the target speaks: http(s) is proxied, ssh is reached with the supermatrix CLI or the browser shell. */
+export type Protocol = 'http' | 'https' | 'ssh';
 
 export interface ServerInfo {
   adminHost: string;
@@ -117,7 +119,7 @@ export interface Deployment {
   subdomain: string;
   host: string;
   url: string;
-  protocol: 'http' | 'https';
+  protocol: Protocol;
   targetHost: string;
   targetPort: number;
   tlsSkipVerify: boolean;
@@ -133,6 +135,12 @@ export interface Deployment {
   /** who can get an email code (otp mode) */
   otpEmails: string[];
   ipAllowlist: string[];
+  /** ssh only: the CLI proxy and the browser shell, the username the shell suggests */
+  sshCli: boolean;
+  sshShell: boolean;
+  sshUser: string;
+  /** the target's host key (SHA256:…), saved the first time the shell connects; "" until then */
+  sshHostKey: string;
   certStatus: CertStatus;
   certExpiresAt: string | null;
   certError: string;
@@ -146,7 +154,7 @@ export interface DeploymentInput {
   relayId?: string;
   domainId?: string;
   subdomain?: string;
-  protocol?: 'http' | 'https';
+  protocol?: Protocol;
   targetHost?: string;
   targetPort?: number;
   tlsSkipVerify?: boolean;
@@ -161,6 +169,11 @@ export interface DeploymentInput {
   basicPassword?: string;
   otpEmails?: string[];
   ipAllowlist?: string[];
+  sshCli?: boolean;
+  sshShell?: boolean;
+  sshUser?: string;
+  /** only "": forget the saved host key so the next one is trusted */
+  sshHostKey?: '';
 }
 
 /** A connected relay's live state (/v1/status, and the WebSocket). */

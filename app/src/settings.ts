@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {useEffect, useState} from 'react';
 
 // Super Matrix has no shared default server: everyone runs their own. The
 // app keeps a list of servers it has signed in to and which one is open.
@@ -23,6 +24,8 @@ export interface Settings {
   // MAX_SPLASH_STRIKES in a row the splash turns itself off.
   splashStrikes: number;
   splashAutoDisabled: boolean;
+  // The home screen's list: one list, or grouped under each relay.
+  homeGroupBy: 'none' | 'relay';
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -34,6 +37,7 @@ const DEFAULT_SETTINGS: Settings = {
   launchSplash: true,
   splashStrikes: 0,
   splashAutoDisabled: false,
+  homeGroupBy: 'none',
 };
 
 type Listener = (settings: Settings) => void;
@@ -98,4 +102,16 @@ export function normalizeServer(url: string): string {
   let u = url.trim().replace(/\/+$/, '');
   if (u && !/^https?:\/\//.test(u)) u = `https://${u}`;
   return u;
+}
+
+/** The current settings, re-rendering when they change. */
+export function useSettings(): Settings {
+  const [s, setS] = useState(current);
+  useEffect(() => {
+    const unsubscribe = settingsStore.subscribe(setS);
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+  return s;
 }

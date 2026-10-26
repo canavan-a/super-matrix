@@ -36,6 +36,14 @@ const (
 	AuthOTP = "otp"
 )
 
+// Protocols a deployment's target can speak. http and https are proxied
+// as HTTP; ssh is reached through the CLI proxy or the browser shell.
+const (
+	ProtocolHTTP  = "http"
+	ProtocolHTTPS = "https"
+	ProtocolSSH   = "ssh"
+)
+
 // Cert statuses.
 const (
 	CertPending = "pending"
@@ -53,7 +61,7 @@ type Deployment struct {
 	// Host is the full public hostname (unique). nil only for rows from
 	// before domains, until Seed fills it in.
 	Host           *string
-	Protocol       string // http | https
+	Protocol       string // http | https | ssh
 	TargetHost     string
 	TargetPort     int
 	TLSSkipVerify  bool   `gorm:"column:tls_skip_verify"`
@@ -70,7 +78,15 @@ type Deployment struct {
 	// a sign-in code in otp mode.
 	OTPEmails string `gorm:"column:otp_emails"`
 	// IPAllowlist is newline-separated CIDRs; empty allows everyone.
-	IPAllowlist   string `gorm:"column:ip_allowlist"`
+	IPAllowlist string `gorm:"column:ip_allowlist"`
+	// SSHCLI and SSHShell turn on the CLI proxy and the browser shell of an
+	// ssh deployment; SSHUser is the username the shell suggests.
+	SSHCLI   bool   `gorm:"column:ssh_cli"`
+	SSHShell bool   `gorm:"column:ssh_shell"`
+	SSHUser  string `gorm:"column:ssh_user"`
+	// SSHHostKey is the target's host key fingerprint (SHA256:…), saved the
+	// first time the shell connects; "" until then.
+	SSHHostKey    string `gorm:"column:ssh_host_key"`
 	CertStatus    string
 	CertExpiresAt *time.Time
 	CertError     string

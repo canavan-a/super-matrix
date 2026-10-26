@@ -13,6 +13,11 @@ wherever the services run. No open ports at home, no third party in the path.
 - **A deployment is a hostname.** `grafana.example.com` → relay `homelab` →
   `http://127.0.0.1:3000`. HTTP, WebSockets and streaming all pass through;
   `https` targets work too, self-signed ones included if you allow it.
+- **SSH too.** An `ssh` deployment (`ssh-box.example.com` → relay → `127.0.0.1:22`)
+  is reached with plain `ssh` and the `supermatrix` CLI as its ProxyCommand,
+  which opens the deployment's sign-in in your browser first, like
+  `cloudflared access ssh`. Or use the browser shell on its hostname. Same auth,
+  same port 443.
 - **Any number of domains.** Wildcard ones (`*.example.com`, each deployment
   picks a subdomain) and exact ones (`status.foo.org`), managed in the app.
 - **A certificate per deployment.** Point a wildcard DNS record at the server
@@ -44,14 +49,14 @@ WebSocket). The relay only dials targets the server has assigned it. Details:
 ## Layout
 
 ```
-server/     Go: the server, the relay and an admin CLI (one module, SQLite via modernc)
+server/     Go: the server, the relay, an admin CLI and the supermatrix SSH client (one module, SQLite via modernc)
 app/        React Native app (Android APK + web), forked from super-chat's
-nix/        NixOS modules: services.supermatrix and services.supermatrix-relay
+nix/        NixOS modules: services.supermatrix, services.supermatrix-relay and programs.supermatrix
 deploy/     systemd units, example config and install.sh for any other Linux; k8s/ manifest
 tools/      appart: generates the logo data and launcher icons from art/
 art/        the broom (broomledger's logo) and "Super Matrix" in super-chat's lettering
 docs/       protocol.md
-release/    APK signing and the guided GitHub release (app-v* tags)
+release/    APK signing and the guided GitHub release (app-v* tags); client.sh builds the CLI for every platform
 ```
 
 ## Running it
@@ -170,6 +175,67 @@ Traefik: TLS passes through by SNI (so the server still gets its own
 per-host certificates), port 80 goes through a plain Ingress, and QUIC uses a
 UDP hostPort. Each domain added in the app also needs adding to its
 `HostSNI` match and port-80 rules.
+
+## SSH deployments
+
+Pick **ssh** as a deployment's protocol and give the address the relay should
+dial on its own machine, usually `127.0.0.1:22`. The deployment keeps its
+hostname, certificate, sign-in and IP allow list; what changes is how it's
+reached:
+
+- **Terminal:** the `supermatrix` CLI carries ssh over a WebSocket on 443.
+  When it has no session it prints a link and opens the deployment's sign-in
+  in your browser, asks you to allow terminal access, and remembers the session
+  (`~/.config/supermatrix`) until it would end in the browser too. ssh itself
+  stays end to end; the sshd still wants its own key or password.
+
+  ```
+  # ~/.ssh/config
+  Host ssh-box.example.com
+    ProxyCommand supermatrix access %h
+  ```
+
+  `supermatrix login --no-browser HOST` is for machines without a browser:
+  open the link anywhere and paste back what it shows. For scripts, set
+  `SUPERMATRIX_TOKEN_FILE` to one of the deployment's API tokens.
+- **Browser shell:** the deployment's own `https://` address is a terminal
+  behind its sign-in. It asks for the server's username and password, and
+  stores nothing. The host key is trusted the first time and checked after;
+  the app can forget it.
+- **A local port:** `supermatrix forward --listen 127.0.0.1:2222 HOST`, then
+  `ssh -p 2222 user@127.0.0.1` or anything else that speaks to the port. Made
+  to run as a service with an API token (below).
+
+Either can be switched off per deployment in the app.
+
+### Installing the client
+
+- **NixOS:**
+
+  ```nix
+  imports = [ inputs.super-matrix.nixosModules.client ];
+  programs.supermatrix = {
+    enable = true;
+    sshHosts = [ "ssh-box.example.com" ];  # ProxyCommand entries in the system ssh_config
+    forwards.box = {                         # a service: supermatrix-forward-box
+      host = "ssh-box.example.com";
+      listen = "127.0.0.1:2222";
+      tokenFile = "/run/secrets/ssh-box-token";
+    };
+  };
+  ```
+- **Any Linux with systemd:** `sudo deploy/install.sh client` installs
+  `/usr/local/bin/supermatrix`; `sudo deploy/install.sh forward box
+  ssh-box.example.com --listen 127.0.0.1:2222 smt_…` adds a
+  `supermatrix-forward@box` service (`deploy/supermatrix-forward@.service`).
+- **macOS, Windows, anything else:** `release/client.sh X.Y.Z` builds archives
+  for Linux, macOS, Windows and FreeBSD (amd64/arm64), with
+  `--publish` for a `client-vX.Y.Z` GitHub release. Or, with Go:
+  `cd server && go build -o ~/bin/supermatrix ./cmd/supermatrix`.
+- **Docker:** the image has it too:
+  `docker run -i --rm --entrypoint supermatrix -e SUPERMATRIX_TOKEN=smt_… supermatrix access ssh-box.example.com`.
+- **In dev:** the `supermatrix` command in `nix develop`, with
+  `--url http://%h:8080` for `<name>.localhost` deployments.
 
 ## The app
 

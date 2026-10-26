@@ -221,3 +221,12 @@ func (a *API) TokenUsed(id string) {
 
 // SetQUIC sets where relays are told to reach QUIC (nil: off).
 func (a *API) SetQUIC(ep *tunnel.QUICEndpoint) { a.quic.Store(ep) }
+
+// SSHHostKeySeen saves an ssh deployment's host key the first time the
+// shell meets it; a key that's already saved is never replaced here.
+func (a *API) SSHHostKeySeen(id, fp string) {
+	res := a.db.Model(&database.Deployment{}).Where("id = ? AND ssh_host_key = ''", id).Update("ssh_host_key", fp)
+	if res.RowsAffected > 0 {
+		a.changed()
+	}
+}

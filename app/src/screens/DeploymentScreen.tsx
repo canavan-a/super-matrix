@@ -1,7 +1,7 @@
 import React, {useEffect, useState} from 'react';
 import {Linking, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
-import {AuthMode, Deployment, DeploymentInput, DeploymentToken} from '../api';
+import {AuthMode, Deployment, DeploymentInput, DeploymentToken, Protocol} from '../api';
 import {Icon} from '../components/Icon';
 import {transportBadge, viaLine} from '../link';
 import {Notice} from '../components/Notice';
@@ -17,7 +17,7 @@ export interface DeploymentForm {
   domainId: string;
   /** the label under a wildcard domain; unused on an exact one */
   subdomain: string;
-  protocol: 'http' | 'https';
+  protocol: Protocol;
   targetHost: string;
   targetPort: string;
   tlsSkipVerify: boolean;
@@ -38,6 +38,10 @@ export interface DeploymentForm {
   otpEmails: string;
   /** one CIDR or address per line */
   ipAllowlist: string;
+  /** ssh: the supermatrix CLI, the browser shell, and the username it suggests */
+  sshCli: boolean;
+  sshShell: boolean;
+  sshUser: string;
 }
 
 export function formFrom(d: Deployment | null, relayId = '', domainId = ''): DeploymentForm {
@@ -61,6 +65,9 @@ export function formFrom(d: Deployment | null, relayId = '', domainId = ''): Dep
     basicPassword: '',
     otpEmails: (d?.otpEmails ?? []).join('\n'),
     ipAllowlist: (d?.ipAllowlist ?? []).join('\n'),
+    sshCli: d?.sshCli ?? true,
+    sshShell: d?.sshShell ?? true,
+    sshUser: d?.sshUser ?? '',
   };
 }
 
@@ -75,7 +82,7 @@ export function formToInput(f: DeploymentForm): DeploymentInput {
     targetPort: Number(f.targetPort),
     tlsSkipVerify: f.protocol === 'https' && f.tlsSkipVerify,
     sni: f.protocol === 'https' ? f.sni.trim() : '',
-    preserveHost: f.preserveHost,
+    preserveHost: f.protocol !== 'ssh' && f.preserveHost,
     enabled: f.enabled,
     authMode: f.authMode,
     allowRootLogin: f.allowRootLogin,
@@ -89,6 +96,9 @@ export function formToInput(f: DeploymentForm): DeploymentInput {
       .split(/[\n,]/)
       .map(s => s.trim())
       .filter(Boolean),
+    sshCli: f.sshCli,
+    sshShell: f.sshShell,
+    sshUser: f.sshUser.trim(),
   };
   if (f.clearLoginPassword) input.loginPassword = '';
   else if (f.loginPassword) input.loginPassword = f.loginPassword;
@@ -271,9 +281,10 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
         options={[
           {value: 'http', label: 'http'},
           {value: 'https', label: 'https'},
+          {value: 'ssh', label: 'ssh'},
         ]}
         value={form.protocol}
-        onChange={v => set({protocol: v})}
+        onChange={v => set(protocolPatch(form, v))}
       />
       <View style={[styles.subRow, styles.spaced]}>
         <Input
@@ -290,11 +301,14 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
           mono
           value={form.targetPort}
           onChangeText={v => set({targetPort: v.replace(/[^0-9]/g, '')})}
-          placeholder="8080"
+          placeholder={form.protocol === 'ssh' ? '22' : '8080'}
           keyboardType="number-pad"
           accessibilityLabel="Target port"
         />
       </View>
+      {form.protocol === 'ssh' && (
+        <Hint>The sshd the relay connects to, from its own machine: 127.0.0.1:22 for the relay's own, or another host on its network.</Hint>
+      )}
       {form.protocol === 'https' && (
         <>
           <ToggleRow
@@ -307,21 +321,36 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
           <Input value={form.sni} onChangeText={v => set({sni: v})} placeholder="Defaults to the target host" />
         </>
       )}
-      <ToggleRow
-        label="Keep the public Host header"
-        hint={`Off sends Host: ${form.targetHost || 'target'}${
-          form.targetPort ? ':' + form.targetPort : ''
-        }. On sends ${publicHost}, for apps that check it.`}
-        value={form.preserveHost}
-        onChange={v => set({preserveHost: v})}
-      />
+      {form.protocol !== 'ssh' && (
+        <ToggleRow
+          label="Keep the public Host header"
+          hint={`Off sends Host: ${form.targetHost || 'target'}${
+            form.targetPort ? ':' + form.targetPort : ''
+          }. On sends ${publicHost}, for apps that check it.`}
+          value={form.preserveHost}
+          onChange={v => set({preserveHost: v})}
+        />
+      )}
       {id && (
         <ToggleRow label="Enabled" hint="Off answers 404 and stops forwarding." value={form.enabled} onChange={v => set({enabled: v})} />
       )}
 
+      {form.protocol === 'ssh' && <SSHAccess form={form} set={set} existing={existing} host={existing?.host ?? publicHost} />}
+
       <Divider />
       <Title>Who gets in</Title>
-      <Chips options={AUTH_OPTIONS} value={form.authMode} onChange={v => set({authMode: v})} />
+      <Chips
+        options={form.protocol === 'ssh' ? AUTH_OPTIONS.filter(o => o.value !== 'basic') : AUTH_OPTIONS}
+        value={form.authMode}
+        onChange={v => set({authMode: v})}
+      />
+      {form.protocol === 'ssh' && form.authMode !== 'none' && (
+        <Hint>
+          {form.authMode === 'token'
+            ? 'The CLI connects with SUPERMATRIX_TOKEN_FILE set to one of the tokens below; the browser shell is unusable.'
+            : 'The same sign-in guards the shell and the CLI: `supermatrix access` opens it in the browser, then remembers the session.'}
+        </Hint>
+      )}
       <Hint>{AUTH_HINT[form.authMode]}</Hint>
 
       {form.authMode === 'login' && (
@@ -442,6 +471,83 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
   );
 }
 
+/** Switching protocol: suggest the usual port, and leave basic auth, which ssh can't use. */
+export function protocolPatch(f: DeploymentForm, protocol: Protocol): Partial<DeploymentForm> {
+  const patch: Partial<DeploymentForm> = {protocol};
+  if (protocol === 'ssh') {
+    if (!f.targetPort || f.targetPort === '80' || f.targetPort === '443') patch.targetPort = '22';
+    if (f.authMode === 'basic') patch.authMode = 'login';
+  } else if (f.protocol === 'ssh' && f.targetPort === '22') {
+    patch.targetPort = '';
+  }
+  return patch;
+}
+
+/** ssh's own settings: how to reach it, the shell, and the host key it trusts. */
+function SSHAccess({
+  form,
+  set,
+  existing,
+  host,
+}: {
+  form: DeploymentForm;
+  set: (patch: Partial<DeploymentForm>) => void;
+  existing: Deployment | null;
+  host: string;
+}) {
+  const theme = useTheme();
+  const styles = makeStyles(theme);
+  const [error, setError] = useState<string | null>(null);
+
+  const resetKey = () =>
+    platformConfirm(
+      'Forget the host key?',
+      'The shell trusts whatever key the server shows next. Only do this if you know why it changed, e.g. the machine was reinstalled.',
+      'Forget',
+      () => saveDeployment(existing!.id, {sshHostKey: ''}).catch(e => setError((e as Error).message)),
+    );
+
+  return (
+    <>
+      <Divider />
+      <Title>SSH access</Title>
+      <ToggleRow
+        label="Terminal (supermatrix CLI)"
+        hint="ssh through the supermatrix CLI as a ProxyCommand. It opens the sign-in below in your browser, then remembers it."
+        value={form.sshCli}
+        onChange={v => set({sshCli: v})}
+      />
+      {form.sshCli && (
+        <CopyBox text={`Host ${host}\n  ProxyCommand supermatrix access %h`} label="~/.ssh/config" />
+      )}
+      <ToggleRow
+        label="Browser shell"
+        hint={`A terminal at https://${host}, behind the sign-in below. It then asks for the server's own username and password; nothing is stored.`}
+        value={form.sshShell}
+        onChange={v => set({sshShell: v})}
+      />
+      {form.sshShell && (
+        <>
+          <Label>Suggested username</Label>
+          <Input value={form.sshUser} onChangeText={v => set({sshUser: v})} placeholder="Optional, e.g. root" autoCapitalize="none" />
+          <Label spaced>Host key</Label>
+          {existing?.sshHostKey ? (
+            <View style={styles.subRow}>
+              <Text style={[styles.flex, styles.mono]} selectable numberOfLines={2}>
+                {existing.sshHostKey}
+              </Text>
+              <Button label="Forget" kind="secondary" onPress={resetKey} />
+            </View>
+          ) : (
+            <Hint>Saved the first time the shell connects, and checked every time after.</Hint>
+          )}
+        </>
+      )}
+      {error ? <Hint error>{error}</Hint> : null}
+    </>
+  );
+}
+
 function certLine(d: Deployment): string {
   switch (d.certStatus) {
     case 'ok':
@@ -527,7 +633,11 @@ function Tokens({d, tokenOnly}: {d: Deployment; tokenOnly: boolean}) {
         <>
           <Notice kind="success" title="New token: copy it now, it won't be shown again" />
           <CopyBox text={fresh} label="token" />
-          <CopyBox text={`curl -H "Authorization: Bearer ${fresh}" ${d.url}/`} label="curl example" />
+          {d.protocol === 'ssh' ? (
+            <CopyBox text={`SUPERMATRIX_TOKEN=${fresh} supermatrix access ${d.host}`} label="CLI example" />
+          ) : (
+            <CopyBox text={`curl -H "Authorization: Bearer ${fresh}" ${d.url}/`} label="curl example" />
+          )}
         </>
       )}
       {error ? <Hint error>{error}</Hint> : null}
@@ -575,6 +685,7 @@ function makeStyles(theme: Theme) {
     relayChipMetaOn: {color: theme.primaryText, opacity: 0.85},
     relayChipTextOn: {color: theme.primaryText},
     multiline: {minHeight: 76, textAlignVertical: 'top'},
+    mono: {fontFamily: 'monospace', fontSize: 12, color: theme.text},
     save: {marginTop: 20},
     tokens: {marginTop: 4},
     tokenRow: {

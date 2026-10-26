@@ -1,0 +1,33 @@
+# Super Matrix forward: a local port to an SSH deployment, one instance per
+# name. Installed by deploy/install.sh forward NAME HOST.
+# Configuration: /etc/supermatrix/forward-%i.env (SUPERMATRIX_URL, SUPERMATRIX_LISTEN)
+# API token:     /etc/supermatrix/forward-%i-token (passed as a credential)
+[Unit]
+Description=Super Matrix forward %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/supermatrix forward
+EnvironmentFile=/etc/supermatrix/forward-%i.env
+Environment=SUPERMATRIX_TOKEN_FILE=%d/token
+LoadCredential=token:/etc/supermatrix/forward-%i-token
+Restart=always
+RestartSec=2
+DynamicUser=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
