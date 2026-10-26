@@ -41,6 +41,9 @@ type Edge struct {
 	// HostKeySeen saves an ssh deployment's host key the first time the
 	// browser shell meets it.
 	HostKeySeen func(deploymentID, fingerprint string)
+	// SSHRecheck is how often open ssh connections are checked against
+	// the deployment's current auth, so revoking access ends them.
+	SSHRecheck time.Duration
 
 	key        []byte
 	now        func() time.Time
@@ -49,6 +52,10 @@ type Edge struct {
 	loginLimit *guard.Limiter
 	failLimit  *guard.Limiter
 	basic      basicCache
+	// sshLimit caps new ssh pipes and shells per client address; cliCodes
+	// are the CLI consent codes not yet traded for a session.
+	sshLimit *guard.Limiter
+	cliCodes cliCodes
 
 	otp otpStore
 	// Codes asked for: per client address, per deployment+address, and in
@@ -68,6 +75,8 @@ func New(cfg config.Config, reg *registry.Registry, hub *tunnel.Hub, cookieKey [
 		sendAllLimit:   guard.NewLimiter(100, time.Hour),
 		failLimit:      guard.NewLimiter(10, time.Minute),
 		basic:          basicCache{ok: map[string]time.Time{}},
+		sshLimit:       guard.NewLimiter(30, time.Minute),
+		SSHRecheck:     15 * time.Second,
 	}
 	e.transport = &http.Transport{
 		DialContext:         e.dial,

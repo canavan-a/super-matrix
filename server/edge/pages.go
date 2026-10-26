@@ -60,11 +60,11 @@ var pages = template.Must(template.New("").Parse(`
 <a class="alt" href="/_supermatrix/login?next={{.Next}}">Use a different email or send a new code</a>{{template "foot"}}{{end}}
 
 {{define "cli"}}{{template "head" .}}<h1>Allow terminal access?</h1><p>The supermatrix CLI on your computer wants to connect to <span class="host">{{.Host}}</span>, signed in as {{.Who}}. Only allow this if you just ran it.</p>
-<form method="post" action="/_supermatrix/cli"><input type="hidden" name="port" value="{{.Port}}"><input type="hidden" name="state" value="{{.State}}">
+<form method="post" action="/_supermatrix/cli"><input type="hidden" name="port" value="{{.Port}}"><input type="hidden" name="state" value="{{.State}}"><input type="hidden" name="challenge" value="{{.Challenge}}">
 <button type="submit">Allow</button></form>{{template "foot"}}{{end}}
 
-{{define "cli-code"}}{{template "head" .}}<h1>{{.Title}}</h1><p>The CLI is waiting for this. Treat it like a password.</p>
-<textarea readonly rows="6" aria-label="Session">{{.Code}}</textarea>{{template "foot"}}{{end}}
+{{define "cli-code"}}{{template "head" .}}<h1>{{.Title}}</h1><p>Paste it only into the terminal where you ran <span class="host">supermatrix login</span> just now. It works once, for 2 minutes, and only there; nobody asking you for it needs it.</p>
+<textarea readonly rows="3" aria-label="Code">{{.Code}}</textarea>{{template "foot"}}{{end}}
 
 {{define "ssh-info"}}{{template "head" .}}<h1>SSH</h1><p><span class="host">{{.Host}}</span> is an SSH deployment.</p>
 {{if .CLI}}<p>Install the supermatrix CLI, then add this to <span class="host">~/.ssh/config</span>:</p>
@@ -84,12 +84,13 @@ type pageData struct {
 	Email  string
 	// SSH pages: the CLI's loopback port and nonce, who it signs in as,
 	// the session to paste, and whether CLI access and signing out apply.
-	Port    int
-	State   string
-	Who     string
-	Code    string
-	CLI     bool
-	SignOut bool
+	Port      int
+	State     string
+	Challenge string
+	Who       string
+	Code      string
+	CLI       bool
+	SignOut   bool
 }
 
 func render(w http.ResponseWriter, status int, name string, d pageData) {

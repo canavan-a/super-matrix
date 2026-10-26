@@ -22,6 +22,8 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -31,11 +33,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -129,6 +133,10 @@ func parseTarget(name string, args []string, extra func(*flag.FlagSet)) (target,
 	u, err := url.Parse(s)
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return target{}, fmt.Errorf("bad URL %q", s)
+	}
+	if u.Scheme == "http" && !isLocal(u.Hostname()) {
+		// Sessions and tokens would cross the network in the clear.
+		return target{}, fmt.Errorf("refusing plain http to %s: use https (http is only for localhost in dev)", u.Host)
 	}
 	return target{base: &url.URL{Scheme: u.Scheme, Host: strings.ToLower(u.Host)}}, nil
 }
@@ -241,7 +249,7 @@ func dial(ctx context.Context, t target) (net.Conn, error) {
 	}
 	if tok != "" {
 		h.Set("X-Supermatrix-Token", tok)
-	} else if m, _ := loadSessions(); m[t.key()].Value != "" {
+	} else if m, _ := loadSessions(); sessionRe.MatchString(m[t.key()].Value) {
 		h.Set("Cookie", t.cookieName()+"="+m[t.key()].Value)
 	}
 	d := websocket.Dialer{Proxy: http.ProxyFromEnvironment, HandshakeTimeout: 30 * time.Second, NetDialContext: dialLocal}
@@ -314,6 +322,9 @@ func forward(ctx context.Context, args []string) error {
 		return err
 	}
 	log.Printf("%s → %s", ln.Addr(), t.key())
+	if ap, err := netip.ParseAddrPort(ln.Addr().String()); err == nil && !ap.Addr().IsLoopback() {
+		log.Printf("warning: %s is reachable from other machines, and anyone who can reach it gets this deployment's ssh port", ln.Addr())
+	}
 	go func() { <-ctx.Done(); ln.Close() }()
 	for {
 		lc, err := ln.Accept()
@@ -356,18 +367,70 @@ func login(ctx context.Context, args []string) error {
 		return err
 	}
 	if noBrowser {
-		return pasteLogin(t)
+		return pasteLogin(ctx, t)
 	}
 	return browserLogin(ctx, t)
 }
 
 func newState() string {
-	b := make([]byte, 24)
+	b := make([]byte, 32)
 	_, _ = rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+// pkce is a fresh verifier and its challenge, base64url(SHA-256(verifier)):
+// the consent page's code only works with the verifier, which never leaves
+// this process.
+func pkce() (verifier, challenge string) {
+	verifier = newState()
+	h := sha256.Sum256([]byte(verifier))
+	return verifier, base64.RawURLEncoding.EncodeToString(h[:])
+}
+
+func (t target) consentURL(port int, state, challenge string) string {
+	q := url.Values{"port": {strconv.Itoa(port)}, "state": {state}, "challenge": {challenge}}
+	return t.url("/_supermatrix/cli?" + q.Encode())
+}
+
+// sessionRe is what a session value can contain (base64url and the dot),
+// so a bad one can't smuggle anything into a header.
+var sessionRe = regexp.MustCompile(`^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`)
+
+// exchange trades a consent code (and the verifier) for the session, over
+// the same HTTPS as everything else, and saves it.
+func exchange(ctx context.Context, t target, code, verifier string) error {
+	body := url.Values{"code": {code}, "verifier": {verifier}}.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.url("/_supermatrix/cli/exchange"), strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "supermatrix/"+version.Version)
+	c := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: dialLocal},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, err := c.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	var out struct {
+		Session string `json:"session"`
+		Error   string `json:"error"`
+	}
+	_ = json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&out)
+	if res.StatusCode != http.StatusOK {
+		if out.Error == "" {
+			out.Error = res.Status
+		}
+		return fmt.Errorf("%s: %s", t.key(), out.Error)
+	}
+	return store(t, out.Session)
+}
+
 func store(t target, v string) error {
+	if !sessionRe.MatchString(v) {
+		return errors.New("that doesn't look like a Super Matrix session")
+	}
 	exp, err := sessionExpiry(v)
 	if err != nil {
 		return err
@@ -384,8 +447,8 @@ func store(t target, v string) error {
 	return nil
 }
 
-// browserLogin opens the deployment's consent page, which hands the
-// session to a listener on loopback.
+// browserLogin opens the deployment's consent page, which sends a code to a
+// listener on loopback; the code and the verifier buy the session.
 func browserLogin(ctx context.Context, t target) error {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -393,29 +456,30 @@ func browserLogin(ctx context.Context, t target) error {
 	}
 	defer ln.Close()
 	state := newState()
+	verifier, challenge := pkce()
 	got := make(chan string, 1)
 	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/callback" || r.URL.Query().Get("state") != state {
+		if r.URL.Path != "/callback" || subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("state")), []byte(state)) != 1 {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<!doctype html><meta charset="utf-8"><title>Super Matrix</title><body style="font-family:sans-serif;text-align:center;padding:48px">Signed in. You can close this tab and go back to the terminal.</body>`)
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		fmt.Fprint(w, `<!doctype html><meta charset="utf-8"><title>Super Matrix</title><body style="font-family:sans-serif;text-align:center;padding:48px">Done. You can close this tab and go back to the terminal.</body>`)
 		select {
-		case got <- r.URL.Query().Get("session"):
+		case got <- r.URL.Query().Get("code"):
 		default:
 		}
 	})}
 	go func() { _ = srv.Serve(ln) }()
 	defer srv.Close()
 
-	port := ln.Addr().(*net.TCPAddr).Port
-	u := t.url("/_supermatrix/cli?port=" + strconv.Itoa(port) + "&state=" + state)
+	u := t.consentURL(ln.Addr().(*net.TCPAddr).Port, state, challenge)
 	fmt.Fprintf(os.Stderr, "Sign in to %s in your browser:\n  %s\n(No browser on this machine? Run `supermatrix login --no-browser %s` first.)\n", t.key(), u, t.key())
 	openBrowser(u)
 	select {
-	case v := <-got:
-		return store(t, v)
+	case code := <-got:
+		return exchange(ctx, t, code, verifier)
 	case <-time.After(5 * time.Minute):
 		return errors.New("gave up waiting for the browser sign-in")
 	case <-ctx.Done():
@@ -424,15 +488,15 @@ func browserLogin(ctx context.Context, t target) error {
 }
 
 // pasteLogin is for machines without a browser: the consent page shows the
-// session instead of redirecting.
-func pasteLogin(t target) error {
-	u := t.url("/_supermatrix/cli?port=0&state=" + newState())
-	fmt.Fprintf(os.Stderr, "Open this anywhere, sign in, and paste what it shows:\n  %s\n> ", u)
+// code instead of redirecting, and it's pasted here.
+func pasteLogin(ctx context.Context, t target) error {
+	verifier, challenge := pkce()
+	fmt.Fprintf(os.Stderr, "Open this anywhere, sign in, and paste the code it shows:\n  %s\n> ", t.consentURL(0, newState(), challenge))
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil && line == "" {
 		return err
 	}
-	return store(t, strings.TrimSpace(line))
+	return exchange(ctx, t, strings.TrimSpace(line), verifier)
 }
 
 func openBrowser(u string) {
@@ -489,10 +553,21 @@ func list() error {
 // the dev server's <name>.localhost deployments work.
 func dialLocal(ctx context.Context, network, addr string) (net.Conn, error) {
 	if host, port, err := net.SplitHostPort(addr); err == nil {
-		if h := strings.ToLower(strings.TrimSuffix(host, ".")); h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		if isLocal(host) && net.ParseIP(host) == nil {
 			addr = net.JoinHostPort("127.0.0.1", port)
 		}
 	}
 	var d net.Dialer
 	return d.DialContext(ctx, network, addr)
+}
+
+// isLocal reports whether host is this machine: localhost, *.localhost or a
+// loopback address.
+func isLocal(host string) bool {
+	h := strings.ToLower(strings.TrimSuffix(host, "."))
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }

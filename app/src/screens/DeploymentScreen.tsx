@@ -344,6 +344,12 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
         value={form.authMode}
         onChange={v => set({authMode: v})}
       />
+      {form.protocol === 'ssh' && form.authMode === 'none' && (
+        <Notice kind="error" title="Anyone can reach this sshd">
+          Public means no Super Matrix sign-in in front: it's like opening port 22 to the internet, and only the server's own passwords
+          or keys stand in the way. Prefer Login or Email code.
+        </Notice>
+      )}
       {form.protocol === 'ssh' && form.authMode !== 'none' && (
         <Hint>
           {form.authMode === 'token'

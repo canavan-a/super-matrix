@@ -232,7 +232,8 @@ then serves these on the deployment's host:
 | Path | |
 |---|---|
 | `/_supermatrix/login`, `verify`, `logout`, `session` | the sign-in pages, as above |
-| `/_supermatrix/cli?port=P&state=S` | the CLI's consent page (needs a session) |
+| `/_supermatrix/cli?port=P&state=S&challenge=C` | the CLI's consent page (needs a browser sign-in) |
+| `/_supermatrix/cli/exchange` | POST `code` + `verifier` → `{"session"}`, for the CLI |
 | `/_supermatrix/ssh` | WebSocket: binary messages are a raw pipe to the target. Off with `sshCli` |
 | `/` | the browser shell, or with `sshShell` off a page showing the ssh config |
 | `/_supermatrix/shell` | the browser shell's WebSocket. Off with `sshShell` |
@@ -245,30 +246,53 @@ with `{"error"}` before the upgrade.
 **The CLI** (`server/cmd/supermatrix`) dials `wss://HOST/_supermatrix/ssh`
 with its saved session as the cookie (`Cookie: __Host-supermatrix=…`), or
 with an API token in `X-Supermatrix-Token`. A 401 with a `login` URL sends
-it through the sign-in:
+it through the sign-in. That works like OAuth's authorization code flow with
+PKCE, so the session never passes through the browser:
 
-1. It listens on `127.0.0.1:<random port>` and opens
-   `/_supermatrix/cli?port=<port>&state=<random>` in the browser. Signed-out
-   browsers go through the sign-in page first, which returns there.
-2. The page asks to allow terminal access as the signed-in user. Allowing
-   (a same-origin POST) mints a session value exactly like the cookie (same
-   kind, address and expiry as the browser's session) and redirects to
-   `http://127.0.0.1:<port>/callback?state=…&session=…`. With `port=0` it
-   shows the value to paste instead.
-3. The CLI checks `state`, saves the value in
-   `$SUPERMATRIX_CONFIG_DIR/sessions.json` (0600) and dials again.
+1. The CLI makes a random `state` and `verifier` and listens on
+   `127.0.0.1:<random port>`. It then opens
+   `/_supermatrix/cli?port=<port>&state=<state>&challenge=<base64url(SHA-256(verifier))>`
+   in the browser. Signed-out browsers go through the sign-in page first,
+   which returns there.
+2. The page asks to allow terminal access as the signed-in user. It needs a
+   browser sign-in: a request that got in with an API token is refused.
+   Allowing is a same-origin POST (refused if `Origin` is another host or
+   `Sec-Fetch-Site` is `cross-site`). It mints a session value exactly like the
+   cookie, with the same kind, address and expiry as the browser's session,
+   and keeps it in memory under a random single-use code for 2 minutes. Then
+   it redirects to `http://127.0.0.1:<port>/callback?state=…&code=…`. With
+   `port=0` it shows the code to paste instead.
+3. The CLI checks `state`, then POSTs `code` and `verifier` to
+   `/_supermatrix/cli/exchange` (no session needed). A code works once, on
+   the deployment that made it, only with the verifier whose hash came with
+   it, and only while the session behind it is still good. A wrong verifier
+   uses the code up too, and failures count toward the 10-a-minute limit per
+   address. The answer is `{"session"}`, which the CLI saves in
+   `$SUPERMATRIX_CONFIG_DIR/sessions.json` (0600) before dialing again.
+
+So a code left in the browser's history, or read off the screen by someone
+else, is worthless. The CLI refuses plain `http://` except to localhost, so
+sessions and tokens never cross a network in the clear.
 
 Because it is the cookie value, a CLI session ends like a browser one:
 when it expires, when the password changes, when root login is turned off or
 when the address leaves the email list. `supermatrix forward` serves the same
-pipe on a local TCP port, one WebSocket per accepted connection.
+pipe on a local TCP port, one WebSocket per accepted connection. It warns
+when that port listens on anything but loopback.
+
+**Open connections** (pipes and shells) are checked again every 15 s with
+the same tests a new one gets, against the deployment as it is then:
+enabled, still `ssh`, the toggle still on, the address still on the allow
+list, and the session or API token still valid. Revoking access in any of
+those ways ends them. New pipes and shells are limited to 30 a minute per
+client address, which also slows password guessing through the shell.
 
 **The browser shell** is xterm.js on `/_supermatrix/shell`. Binary messages
 are terminal bytes; text messages are JSON, `{"type":"resize","cols","rows"}`
 from the page and `{"type":"exit","message"}` from the server. The server is
 the SSH client (`x/crypto/ssh`) over a data stream from the relay. It asks in
 the terminal for a username (suggesting `sshUser`), then for a password or
-keyboard-interactive answers, and keeps none of them. The host key is trusted
+keyboard-interactive answers, and keeps none of them. Its WebSocket takes messages of at most 64 KiB. The host key is trusted
 the first time (saved as `ssh_host_key`) and must match after that. Changing
 the relay or target forgets it, as does PATCH `sshHostKey: ""`. The shell
 closes when the Super Matrix session ends.

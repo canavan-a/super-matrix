@@ -206,7 +206,12 @@ reached:
   `ssh -p 2222 user@127.0.0.1` or anything else that speaks to the port. Made
   to run as a service with an API token (below).
 
-Either can be switched off per deployment in the app.
+Either can be switched off per deployment in the app. Revoking access (a new
+password, a removed address or token, a toggle, the allow list) also ends
+connections already open, within 15 seconds. The session itself never passes
+through the browser: the sign-in hands the CLI a single-use code that only
+works with a secret the CLI kept (PKCE). Avoid **Public** for SSH: that puts
+nothing but the sshd's own auth in front.
 
 ### Installing the client
 

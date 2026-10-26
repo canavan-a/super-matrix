@@ -149,7 +149,12 @@ func (e *Edge) session(r *http.Request, ent *registry.Entry) (session, string) {
 	if err != nil {
 		return session{}, authRequired
 	}
-	enc, mac, ok := strings.Cut(c.Value, ".")
+	return e.sessionValue(c.Value, ent)
+}
+
+// sessionValue checks a session value (the cookie's, or one the CLI kept).
+func (e *Edge) sessionValue(v string, ent *registry.Entry) (session, string) {
+	enc, mac, ok := strings.Cut(v, ".")
 	if !ok {
 		return session{}, authRequired
 	}

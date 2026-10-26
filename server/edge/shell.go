@@ -2,6 +2,7 @@ package edge
 
 import (
 	"bufio"
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -198,14 +199,23 @@ func (t *term) prompt(label string, echo bool) (string, error) {
 	}
 }
 
-func (e *Edge) shellSocket(w http.ResponseWriter, r *http.Request, ent *registry.Entry, s session) {
+func (e *Edge) shellSocket(w http.ResponseWriter, r *http.Request, ent *registry.Entry, s session, orig *http.Request, ip string) {
 	ws, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer ws.Close()
+	// Keystrokes and resizes are small; nothing needs a big message.
+	ws.SetReadLimit(64 << 10)
 	t := newTerm(ws)
 	defer t.in.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.watchAccess(ctx, orig, ent.ID, ip, true, func() {
+		t.say("\r\n\x1b[33mAccess to %s changed; disconnected.\x1b[0m\r\n", ent.Host)
+		t.exit("Access ended.")
+		ws.Close()
+	})
 	if !s.Expires.IsZero() {
 		// The shell ends with the Super Matrix session.
 		stop := time.AfterFunc(time.Until(s.Expires), func() {
