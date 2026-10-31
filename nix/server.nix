@@ -4,8 +4,9 @@
 # rather than a buildGoModule derivation: keeping a vendorHash in sync by hand
 # on every go.sum change costs more than it's worth for a binary with no
 # reproducibility requirement. It rebuilds from ${self}/server on every
-# activation; goCache keeps that fast after the first run. The web app
-# follows the same tradeoff via npmCache.
+# activation; goCache keeps that fast after the first run, and the service
+# only restarts when the server binary changed. The web app follows the same
+# tradeoff via npmCache.
 { self }:
 { config, lib, pkgs, ... }:
 let
@@ -208,9 +209,20 @@ in
         export CGO_ENABLED=0
         mkdir -p ${stateDir}/bin ${goCache}
         cd ${self}/server
-        ${pkgs.go}/bin/go build -buildvcs=false -o ${serverBin}.new ./cmd/supermatrix-server
-        mv -f ${serverBin}.new ${serverBin}
-        ${pkgs.go}/bin/go build -buildvcs=false -o ${adminBin}.new ./cmd/supermatrix-admin
+        # Restarting the server drops every relay, so only restart when the
+        # server binary itself changed, not for a web-only change. -trimpath
+        # keeps the ${self} store path out of the build, so an unrelated
+        # commit (or a switch with nothing new) builds byte-identical output.
+        changed=0
+        ${pkgs.go}/bin/go build -trimpath -buildvcs=false -o ${serverBin}.new ./cmd/supermatrix-server
+        if ${pkgs.diffutils}/bin/cmp -s ${serverBin}.new ${serverBin}; then
+          rm -f ${serverBin}.new
+        else
+          mv -f ${serverBin}.new ${serverBin}
+          changed=1
+        fi
+        # The admin CLI isn't part of the running service; just replace it.
+        ${pkgs.go}/bin/go build -trimpath -buildvcs=false -o ${adminBin}.new ./cmd/supermatrix-admin
         mv -f ${adminBin}.new ${adminBin}
       '' + lib.optionalString cfg.web.enable ''
         # ${self}/app is in the read-only store and npm ci writes
@@ -224,13 +236,19 @@ in
         cd "$appBuild"
         ${pkgs.nodejs_22}/bin/npm ci
         ${pkgs.nodejs_22}/bin/npm run build:web
-        rm -rf ${webDir}.new
-        cp -r dist ${webDir}.new
-        chown -R supermatrix:supermatrix ${webDir}.new
-        rm -rf ${webDir}
-        mv -f ${webDir}.new ${webDir}
+        # The server reads ${webDir} from disk on every request, so a new web
+        # build goes live without a restart.
+        if ! ${pkgs.diffutils}/bin/diff -rq dist ${webDir} >/dev/null 2>&1; then
+          rm -rf ${webDir}.new
+          cp -r dist ${webDir}.new
+          chown -R supermatrix:supermatrix ${webDir}.new
+          rm -rf ${webDir}
+          mv -f ${webDir}.new ${webDir}
+        fi
       '' + ''
-        ${pkgs.systemd}/bin/systemctl try-restart supermatrix.service || true
+        if [ "$changed" = 1 ]; then
+          ${pkgs.systemd}/bin/systemctl try-restart supermatrix.service || true
+        fi
       '';
     };
 

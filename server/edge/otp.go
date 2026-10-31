@@ -137,7 +137,7 @@ func (e *Edge) otpRoutes(w http.ResponseWriter, r *http.Request, ent *registry.E
 		}
 		// The same answer either way, and the email goes out in the
 		// background, so this can't be used to find out who's on the list.
-		if ent.OTPEmails[email] {
+		if ent.AllowsEmail(email) {
 			code, err := e.otp.newCode(otpKey(ent, email), now)
 			if err != nil {
 				message(w, http.StatusInternalServerError, "Something went wrong", "Couldn't make a code. Try again.")
@@ -162,7 +162,7 @@ func (e *Edge) otpRoutes(w http.ResponseWriter, r *http.Request, ent *registry.E
 			page(http.StatusTooManyRequests, "otp-code", pageData{Email: email, Error: "Too many attempts. Wait a minute and try again."})
 			return
 		}
-		if !ent.OTPEmails[email] || !e.otp.check(otpKey(ent, email), code, e.now()) {
+		if !ent.AllowsEmail(email) || !e.otp.check(otpKey(ent, email), code, e.now()) {
 			page(http.StatusUnauthorized, "otp-code", pageData{Email: email, Error: "That code is wrong or has expired."})
 			return
 		}

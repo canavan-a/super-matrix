@@ -290,7 +290,7 @@ function makeStyles(theme: Theme) {
     },
     relayName: {fontSize: 15, fontWeight: '700', color: theme.text},
     relayMeta: {fontSize: 12, color: theme.textMuted, marginTop: 2},
-    fallback: {color: theme.danger},
+    fallback: {color: theme.warning},
     relayBody: {
       paddingHorizontal: 14,
       paddingBottom: 14,

@@ -160,6 +160,27 @@ func TestEmailCode(t *testing.T) {
 		t.Fatalf("expired notice: %d", res.StatusCode)
 	}
 
+	// *@domain lets in everyone at that domain, and nothing else.
+	for _, bad := range []string{"a*@example.com", "*@*.com", "*@ex*ample.com"} {
+		e.api("PATCH", "/v1/deployments/"+d.ID, map[string]any{"otpEmails": []string{bad}}, 400, nil)
+	}
+	e.api("PATCH", "/v1/deployments/"+d.ID, map[string]any{"otpEmails": []string{"*@Corp.com", "ann@example.com"}}, 200, nil)
+	post("/_supermatrix/login", url.Values{"email": {"cy@corp.com"}})
+	post("/_supermatrix/login", url.Values{"email": {"dee@sub.corp.com"}})
+	post("/_supermatrix/login", url.Values{"email": {"*@corp.com"}})
+	e.waitFor(func() bool { return mail.code("cy@corp.com") != "" })
+	if mail.code("dee@sub.corp.com") != "" || mail.code("*@corp.com") != "" {
+		t.Fatal("wildcard matched more than its domain")
+	}
+	res, _ = post("/_supermatrix/verify", url.Values{"email": {"cy@corp.com"}, "code": {mail.code("cy@corp.com")}})
+	if res.StatusCode != 303 {
+		t.Fatalf("wildcard verify: %d", res.StatusCode)
+	}
+	cyCookie := http.Header{"Cookie": {res.Cookies()[0].Name + "=" + res.Cookies()[0].Value}}
+	if res, _ := e.get("otp.test", "/", cyCookie); res.StatusCode != 200 {
+		t.Fatalf("wildcard session: %d", res.StatusCode)
+	}
+
 	// Taking someone off the list signs them out.
 	e.api("PATCH", "/v1/deployments/"+d.ID, map[string]any{"otpEmails": []string{"bob@example.com"}}, 200, nil)
 	if res, _ := e.get("otp.test", "/", withCookie); res.StatusCode != 401 {

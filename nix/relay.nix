@@ -66,9 +66,17 @@ in
         export CGO_ENABLED=0
         mkdir -p ${stateDir}/bin ${goCache}
         cd ${self}/server
-        ${pkgs.go}/bin/go build -buildvcs=false -o ${relayBin}.new ./cmd/supermatrix-relay
-        mv -f ${relayBin}.new ${relayBin}
-        ${pkgs.systemd}/bin/systemctl try-restart supermatrix-relay.service || true
+        ${pkgs.go}/bin/go build -trimpath -buildvcs=false -o ${relayBin}.new ./cmd/supermatrix-relay
+        # Restarting drops every connection the relay is carrying, so only
+        # do it for a binary that actually changed. -trimpath keeps the
+        # ${self} store path out of the build, so an unrelated commit (or a
+        # switch with nothing new) builds byte-identical output.
+        if ${pkgs.diffutils}/bin/cmp -s ${relayBin}.new ${relayBin}; then
+          rm -f ${relayBin}.new
+        else
+          mv -f ${relayBin}.new ${relayBin}
+          ${pkgs.systemd}/bin/systemctl try-restart supermatrix-relay.service || true
+        fi
       '';
     };
 

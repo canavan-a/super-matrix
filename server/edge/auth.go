@@ -183,7 +183,7 @@ func (e *Edge) sessionValue(v string, ent *registry.Entry) (session, string) {
 		}
 	case kind == "o" && len(parts) == 4 && ent.AuthMode == database.AuthOTP:
 		email = parts[3]
-		if !ent.OTPEmails[email] {
+		if !ent.AllowsEmail(email) {
 			return session{}, authRequired
 		}
 	default:

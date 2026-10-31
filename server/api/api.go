@@ -51,6 +51,10 @@ type API struct {
 
 	tokenMu   sync.Mutex
 	tokenSeen map[string]time.Time
+
+	// certRetried is when each host's certificate was last retried by hand.
+	certMu      sync.Mutex
+	certRetried map[string]time.Time
 }
 
 func New(db *gorm.DB, cfg config.Config, reg *registry.Registry, hub *tunnel.Hub) *API {
@@ -60,6 +64,8 @@ func New(db *gorm.DB, cfg config.Config, reg *registry.Registry, hub *tunnel.Hub
 		loginLimit: guard.NewLimiter(10, time.Minute),
 		watchers:   newWatchers(),
 		tokenSeen:  map[string]time.Time{},
+
+		certRetried: map[string]time.Time{},
 	}
 	hub.OnChange = func(string) { a.broadcastStatus() }
 	hub.OnHello = a.onHello
@@ -136,6 +142,7 @@ func (a *API) Router() *gin.Engine {
 	admin.GET("/deployments/:id", a.getDeployment)
 	admin.PATCH("/deployments/:id", a.updateDeployment)
 	admin.DELETE("/deployments/:id", a.deleteDeployment)
+	admin.POST("/deployments/:id/cert", a.retryCert)
 	admin.POST("/deployments/:id/tokens", a.createToken)
 	admin.DELETE("/deployments/:id/tokens/:tid", a.deleteToken)
 

@@ -212,7 +212,7 @@ function DeploymentRow({
           </View>
           {link && (
             <View style={[styles.badge, fallback && styles.badgeWarn]}>
-              <Icon name="globe" size={12} color={fallback ? theme.danger : theme.textMuted} />
+              <Icon name="globe" size={12} color={fallback ? theme.warning : theme.textMuted} />
               <Text style={[styles.badgeText, fallback && styles.badgeWarnText]}>{transportBadge(link)}</Text>
             </View>
           )}
@@ -272,8 +272,8 @@ function makeStyles(theme: Theme) {
       backgroundColor: theme.surfaceAlt,
     },
     badgeText: {fontSize: 11, fontWeight: '600', color: theme.textMuted},
-    badgeWarn: {backgroundColor: theme.dangerBg},
-    badgeWarnText: {color: theme.danger},
+    badgeWarn: {backgroundColor: theme.warningBg},
+    badgeWarnText: {color: theme.warning},
     detail: {fontSize: 11, color: theme.textMuted, flexShrink: 1},
     newButton: {marginTop: 8, alignSelf: 'center'},
     list: {marginTop: 12},

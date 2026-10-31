@@ -98,11 +98,18 @@ in
         export CGO_ENABLED=0
         mkdir -p ${stateDir}/bin ${goCache}
         cd ${self}/server
-        ${pkgs.go}/bin/go build -buildvcs=false -o ${clientBin}.new ./cmd/supermatrix
-        mv -f ${clientBin}.new ${clientBin}
+        ${pkgs.go}/bin/go build -trimpath -buildvcs=false -o ${clientBin}.new ./cmd/supermatrix
+        # Only swap in (and restart the forwards for) a binary that actually
+        # changed; see the relay module.
+        if ${pkgs.diffutils}/bin/cmp -s ${clientBin}.new ${clientBin}; then
+          rm -f ${clientBin}.new
+        else
+          mv -f ${clientBin}.new ${clientBin}
       '' + lib.concatMapStrings (name: ''
-        ${pkgs.systemd}/bin/systemctl try-restart supermatrix-forward-${name}.service || true
-      '') (lib.attrNames cfg.forwards);
+          ${pkgs.systemd}/bin/systemctl try-restart supermatrix-forward-${name}.service || true
+      '') (lib.attrNames cfg.forwards) + ''
+        fi
+      '';
     };
 
     environment.systemPackages = [ wrapper ];

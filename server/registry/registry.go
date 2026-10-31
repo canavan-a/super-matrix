@@ -26,8 +26,19 @@ type Entry struct {
 	Nets []netip.Prefix
 	// Tokens maps token hashes to their tokens.
 	Tokens map[string]Token
-	// OTPEmails is the set of addresses that can get a sign-in code.
+	// OTPEmails is the set of addresses that can get a sign-in code;
+	// "*@domain" stands for everyone at that domain.
 	OTPEmails map[string]bool
+}
+
+// AllowsEmail reports whether a normalized address is on the email list,
+// by its own entry or a *@domain one. Subdomains aren't covered.
+func (e *Entry) AllowsEmail(email string) bool {
+	at := strings.LastIndexByte(email, '@')
+	if at < 0 || email[:at] == "*" {
+		return false
+	}
+	return e.OTPEmails[email] || e.OTPEmails["*"+email[at:]]
 }
 
 // Token is a deployment API token as the edge needs it.

@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -284,6 +285,10 @@ func (a *API) apply(d *database.Deployment, in deploymentInput) error {
 				continue
 			}
 			m := edge.NormalizeEmail(raw)
+			// "*" only works as the whole name part: *@domain.com.
+			if name, domain, _ := strings.Cut(m, "@"); name != "*" && strings.Contains(name, "*") || strings.Contains(domain, "*") {
+				m = ""
+			}
 			if m == "" {
 				return inputError("email list: " + strings.TrimSpace(raw) + " isn't an email address")
 			}
@@ -450,6 +455,43 @@ func (a *API) deleteDeployment(c *gin.Context) {
 	a.db.Delete(d)
 	a.changed()
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// certRetryEvery spaces out manual retries for one host. Let's Encrypt
+// allows 5 failed validations per hostname an hour, and a host with a
+// cached certificate gains nothing from retrying sooner.
+const certRetryEvery = 15 * time.Minute
+
+// retryCert gets a deployment's certificate now rather than at the next
+// 12-hourly warm-up: it loads a cached one or asks Let's Encrypt again. The
+// outcome arrives like any warm-up's, through CertStatus.
+func (a *API) retryCert(c *gin.Context) {
+	d := a.findDeployment(c)
+	if d == nil {
+		return
+	}
+	switch {
+	case a.Certs == nil:
+		abort(c, http.StatusConflict, "TLS is off on this server")
+		return
+	case !d.Enabled || d.Host == nil:
+		abort(c, http.StatusConflict, "turn the deployment on first")
+		return
+	}
+	host, now := *d.Host, a.now()
+	a.certMu.Lock()
+	if last, ok := a.certRetried[host]; ok && now.Sub(last) < certRetryEvery {
+		a.certMu.Unlock()
+		mins := int((certRetryEvery-now.Sub(last))/time.Minute) + 1
+		abort(c, http.StatusTooManyRequests, fmt.Sprintf("retried recently, try again in %d min", mins))
+		return
+	}
+	a.certRetried[host] = now
+	a.certMu.Unlock()
+
+	a.db.Model(&database.Deployment{}).Where("id = ?", d.ID).Updates(map[string]any{"cert_status": database.CertPending, "cert_error": ""})
+	a.changed() // warms every pending host, this one included
+	c.JSON(http.StatusAccepted, gin.H{"ok": true})
 }
 
 // createToken adds an API token to a deployment; it's shown only here.

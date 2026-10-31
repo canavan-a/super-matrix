@@ -21,6 +21,8 @@ export interface Theme {
   primaryText: string;
   danger: string;
   dangerBg: string;
+  warning: string;
+  warningBg: string;
   success: string;
   bubbleUser: string;
   bubbleUserText: string;
@@ -44,6 +46,8 @@ const light: Theme = {
   primaryText: '#ffffff',
   danger: '#cf222e',
   dangerBg: '#ffebe9',
+  warning: '#9a6700',
+  warningBg: '#fff8c5',
   success: '#1a7f37',
   bubbleUser: '#0969da',
   bubbleUserText: '#ffffff',
@@ -67,6 +71,8 @@ const dark: Theme = {
   primaryText: '#ffffff',
   danger: '#f85149',
   dangerBg: '#3d1418',
+  warning: '#d29922',
+  warningBg: '#3b2e0e',
   success: '#3fb950',
   bubbleUser: '#2f81f7',
   bubbleUserText: '#ffffff',
@@ -90,6 +96,8 @@ const slate: Theme = {
   primaryText: '#0d1117',
   danger: '#ef6a6a',
   dangerBg: '#3a2222',
+  warning: '#e3b341',
+  warningBg: '#3a3220',
   success: '#6fcf97',
   bubbleUser: '#5aa9e6',
   bubbleUserText: '#0d1117',
@@ -113,6 +121,8 @@ const sepia: Theme = {
   primaryText: '#fdf6e7',
   danger: '#a13c2c',
   dangerBg: '#f0dcd2',
+  warning: '#8a6510',
+  warningBg: '#efe2b8',
   success: '#4e7c3a',
   bubbleUser: '#a0651b',
   bubbleUserText: '#fdf6e7',
@@ -140,6 +150,8 @@ const ember: Theme = {
   primaryText: '#f1e2d9',
   danger: '#c93a3a',
   dangerBg: '#1c0d0c',
+  warning: '#c9952c',
+  warningBg: '#1c160a',
   success: '#4f9e70',
   bubbleUser: '#8a3620',
   bubbleUserText: '#f1e2d9',

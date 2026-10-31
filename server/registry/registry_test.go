@@ -28,3 +28,20 @@ func TestAllowlist(t *testing.T) {
 		t.Error("bad prefix accepted")
 	}
 }
+
+func TestAllowsEmail(t *testing.T) {
+	e := &Entry{OTPEmails: map[string]bool{"ann@example.com": true, "*@corp.com": true}}
+	for email, want := range map[string]bool{
+		"ann@example.com":   true,
+		"bob@example.com":   false,
+		"bob@corp.com":      true,
+		"bob@sub.corp.com":  false,
+		"bob@corp.com.evil": false,
+		"*@corp.com":        false,
+		"corp.com":          false,
+	} {
+		if got := e.AllowsEmail(email); got != want {
+			t.Errorf("%s: %v", email, got)
+		}
+	}
+}

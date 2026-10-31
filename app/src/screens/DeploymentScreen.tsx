@@ -407,7 +407,9 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
             style={styles.multiline}
             accessibilityLabel="Email addresses that can sign in"
           />
-          <Hint>One address per line. Taking one off signs that person out.</Hint>
+          <Hint>
+            One address per line, or *@example.com for everyone at a domain. Taking one off signs that person out.
+          </Hint>
           <Label>Stay signed in for</Label>
           <Chips options={TTL_OPTIONS} value={form.sessionTtlS} onChange={v => set({sessionTtlS: v})} />
           <Hint>After this they're asked for a new code.</Hint>
