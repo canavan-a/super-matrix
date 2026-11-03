@@ -219,6 +219,11 @@ export async function renameRelay(id: string, name: string): Promise<void> {
   await refresh().catch(() => {});
 }
 
+export async function setRelayManage(id: string, on: boolean): Promise<void> {
+  await authed((s, t) => api.setRelayManage(s, t, id, on));
+  await refresh().catch(() => {});
+}
+
 export async function deleteRelay(id: string): Promise<void> {
   await authed((s, t) => api.deleteRelay(s, t, id));
   await refresh().catch(() => {});

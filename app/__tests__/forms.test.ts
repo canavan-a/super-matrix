@@ -160,7 +160,7 @@ describe('ssh deployments', () => {
 
 describe('home grouped by relay', () => {
   const relay = (id: string, name: string) =>
-    ({id, name, createdAt: '', lastSeenAt: null, lastIp: '', version: '', hostname: '', online: true, deployments: 0, transport: '', fallback: ''}) as const;
+    ({id, name, createdAt: '', lastSeenAt: null, lastIp: '', version: '', hostname: '', online: true, deployments: 0, transport: '', fallback: '', manageDeployments: false}) as const;
 
   it('groups under relays by name, empty relays included, orphans last', () => {
     const ds = [

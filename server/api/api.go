@@ -120,6 +120,7 @@ func (a *API) Router() *gin.Engine {
 	v1.GET("/relay/connect", a.relayConnect)
 	v1.GET("/relay/transports", a.relayTransports)
 	v1.GET("/ws", a.ws)
+	a.relayRoutes(v1)
 
 	admin := v1.Group("", a.requireAdmin)
 	admin.POST("/logout", a.logout)
@@ -190,7 +191,7 @@ func (a *API) changed() {
 	}
 	if a.Certs != nil {
 		var pending []string
-		a.db.Model(&database.Deployment{}).Where("enabled = ? AND cert_status = ?", true, database.CertPending).Pluck("host", &pending)
+		a.db.Model(&database.Deployment{}).Where("cert_status = ?", database.CertPending).Pluck("host", &pending)
 		for _, host := range pending {
 			a.Certs.Warm(host)
 		}

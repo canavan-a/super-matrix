@@ -26,7 +26,7 @@ host gets its own.
 ## Certificates
 
 With `SUPERMATRIX_TLS=acme`, `golang.org/x/crypto/acme/autocert` gets one
-certificate per hostname: the admin host and each enabled deployment. Its host
+certificate per hostname: the admin host and each deployment (disabled ones too, so their page loads). Its host
 policy only allows those names, so an unknown SNI never reaches Let's Encrypt.
 HTTP-01 is answered on `:80` (everything else there redirects to https) and
 TLS-ALPN-01 on `:443`. Certificates are cached in `DATA_DIR/certs`.
@@ -162,7 +162,7 @@ header is the target's `host[:port]`, or the public hostname when
 
 Checked in this order:
 
-1. **Disabled** deployments answer 404.
+1. **Disabled** deployments answer 503 with a "Service disabled" page (and `Retry-After`), whatever the auth or credentials; the relay isn't given their target. Disabling is per deployment (`PATCH {"enabled": false}`, `supermatrix-relay disable HOST`); the sign-in settings are kept for when it's turned back on.
 2. **IP allow list** (CIDRs). If it's set and the visitor's address isn't on
    it, the answer is 403. The visitor's address is the TCP peer, or with
    `SUPERMATRIX_TRUST_PROXY=1` the rightmost `X-Forwarded-For` on loopback
@@ -300,7 +300,7 @@ closes when the Super Matrix session ends.
 ## Admin API
 
 The admin host serves this API; every route except `login`, `relay/*` (relay
-tokens) and `ws` needs `Authorization: Bearer sms_…`.
+tokens, below) and `ws` needs `Authorization: Bearer sms_…`.
 
 | | |
 |---|---|
@@ -324,6 +324,38 @@ password file and restarting signs every app out.
 disconnects or reports health, and sends `{"type":"changed"}` when relays,
 deployments or certificates change, so the app refetches. A bad token closes
 the socket with code 4001.
+
+## Relays managing their deployments
+
+A relay can manage its own deployments once **Manage its deployments** is on
+for it in the app (`PATCH /v1/relays/:id {"manageDeployments": true}`; off
+by default). It authenticates with its relay token, `Authorization: Bearer
+smr_…`, the same as for the relay link.
+
+| | |
+|---|---|
+| `GET /v1/relay/me` | the relay as in `GET /v1/relays`, including `manageDeployments`; works with the permission off |
+| `GET /v1/relay/domains` | the domains, read-only |
+| `GET/POST /v1/relay/deployments`, `GET/PATCH/DELETE /v1/relay/deployments/:id` | as the admin routes, scoped to this relay |
+| `POST /v1/relay/deployments/:id/tokens`, `DELETE …/tokens/:tid` | as the admin routes, on this relay's deployments |
+
+Everything but `/me` answers 403 while the permission is off, and turning it
+off takes effect on the next request. A relay sees only deployments on
+itself (another relay's answer 404, like ones that don't exist); a new one
+lands on the relay whatever `relayId` says, and a `relayId` of any other
+relay is refused (403), so it can't move one away or take one over. It
+can't change domains, relays or the server. The server logs every change a
+relay makes.
+
+**On the relay's machine.** While it runs, `supermatrix-relay` serves this
+API on `127.0.0.1:3388` (`SUPERMATRIX_LOCAL_ADDR`, `off` turns it off) with
+no auth: `/me`, `/domains` and `/deployments…` are passed to
+`/v1/relay/…` with the relay's token added, so the token never leaves the
+service. It only listens on loopback addresses, and refuses requests with an
+`Origin` header (web pages) or a non-loopback `Host` (DNS rebinding). Anything
+else that can run programs on the machine can use it. The same binary is its
+CLI: `supermatrix-relay status | domains | list | get | create | update |
+delete | token`.
 
 ## Storage
 

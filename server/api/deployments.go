@@ -94,7 +94,7 @@ func splitAllowlist(s string) []string {
 }
 
 func (a *API) findDeployment(c *gin.Context) *database.Deployment {
-	d, err := database.First[database.Deployment](a.db.Where("id = ?", c.Param("id")))
+	d, err := database.First[database.Deployment](a.deployments(c).Where("id = ?", c.Param("id")))
 	if err != nil {
 		abort(c, http.StatusInternalServerError, "server error")
 		return nil
@@ -118,7 +118,7 @@ func (a *API) tokensOf(ids ...string) map[string][]database.DeploymentToken {
 
 func (a *API) listDeployments(c *gin.Context) {
 	var ds []database.Deployment
-	if err := a.db.Order("host").Find(&ds).Error; err != nil {
+	if err := a.deployments(c).Order("host").Find(&ds).Error; err != nil {
 		abort(c, http.StatusInternalServerError, "server error")
 		return
 	}
@@ -397,6 +397,12 @@ func (a *API) createDeployment(c *gin.Context) {
 		abort(c, http.StatusBadRequest, "bad json")
 		return
 	}
+	if r := relayOf(c); r != nil && in.RelayID == nil {
+		in.RelayID = &r.ID
+	}
+	if !ownRelay(c, &in) {
+		return
+	}
 	now := a.now()
 	d := database.Deployment{
 		ID: database.NewID(), Protocol: database.ProtocolHTTP, Enabled: true, AuthMode: database.AuthLogin, SSHCLI: true, SSHShell: true,
@@ -429,6 +435,9 @@ func (a *API) updateDeployment(c *gin.Context) {
 	var in deploymentInput
 	if err := c.ShouldBindJSON(&in); err != nil {
 		abort(c, http.StatusBadRequest, "bad json")
+		return
+	}
+	if !ownRelay(c, &in) {
 		return
 	}
 	if err := a.apply(d, in); err != nil {
@@ -474,8 +483,8 @@ func (a *API) retryCert(c *gin.Context) {
 	case a.Certs == nil:
 		abort(c, http.StatusConflict, "TLS is off on this server")
 		return
-	case !d.Enabled || d.Host == nil:
-		abort(c, http.StatusConflict, "turn the deployment on first")
+	case d.Host == nil:
+		abort(c, http.StatusConflict, "this deployment has no hostname yet")
 		return
 	}
 	host, now := *d.Host, a.now()
@@ -530,7 +539,11 @@ func (a *API) createToken(c *gin.Context) {
 }
 
 func (a *API) deleteToken(c *gin.Context) {
-	res := a.db.Where("id = ? AND deployment_id = ?", c.Param("tid"), c.Param("id")).Delete(&database.DeploymentToken{})
+	d := a.findDeployment(c)
+	if d == nil {
+		return
+	}
+	res := a.db.Where("id = ? AND deployment_id = ?", c.Param("tid"), d.ID).Delete(&database.DeploymentToken{})
 	if res.RowsAffected == 0 {
 		abort(c, http.StatusNotFound, "no such token")
 		return

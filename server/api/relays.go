@@ -25,6 +25,8 @@ type relayDTO struct {
 	Transport   string     `json:"transport"`
 	Fallback    string     `json:"fallback"`
 	Deployments int64      `json:"deployments"`
+	// ManageDeployments: the relay can manage its own deployments.
+	ManageDeployments bool `json:"manageDeployments"`
 }
 
 func (a *API) relayOut(r database.Relay, online map[string]tunnel.RelayState) relayDTO {
@@ -34,7 +36,7 @@ func (a *API) relayOut(r database.Relay, online map[string]tunnel.RelayState) re
 	return relayDTO{
 		ID: r.ID, Name: r.Name, CreatedAt: r.CreatedAt, LastSeenAt: r.LastSeenAt, LastIP: r.LastIP,
 		Version: r.Version, Hostname: r.Hostname, Online: on, Deployments: n,
-		Transport: r.Transport, Fallback: r.Fallback,
+		Transport: r.Transport, Fallback: r.Fallback, ManageDeployments: r.ManageDeployments,
 	}
 }
 
@@ -97,15 +99,34 @@ func (a *API) updateRelay(c *gin.Context) {
 	if r == nil {
 		return
 	}
+	// Either or both: a new name, and whether the relay may manage its own
+	// deployments.
 	var b struct {
-		Name string `json:"name"`
+		Name              *string `json:"name"`
+		ManageDeployments *bool   `json:"manageDeployments"`
 	}
-	if err := c.ShouldBindJSON(&b); err != nil || cleanName(b.Name) == "" {
-		abort(c, http.StatusBadRequest, "name required")
+	if err := c.ShouldBindJSON(&b); err != nil {
+		abort(c, http.StatusBadRequest, "bad json")
 		return
 	}
-	r.Name = cleanName(b.Name)
-	a.db.Model(r).Update("name", r.Name)
+	upd := map[string]any{}
+	if b.Name != nil {
+		if cleanName(*b.Name) == "" {
+			abort(c, http.StatusBadRequest, "name required")
+			return
+		}
+		r.Name = cleanName(*b.Name)
+		upd["name"] = r.Name
+	}
+	if b.ManageDeployments != nil {
+		r.ManageDeployments = *b.ManageDeployments
+		upd["manage_deployments"] = r.ManageDeployments
+	}
+	if len(upd) == 0 {
+		abort(c, http.StatusBadRequest, "nothing to change")
+		return
+	}
+	a.db.Model(r).Updates(upd)
 	a.changed()
 	c.JSON(http.StatusOK, a.relayOut(*r, a.hub.State()))
 }

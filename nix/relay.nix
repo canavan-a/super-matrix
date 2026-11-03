@@ -38,6 +38,19 @@ in
       description = "Overrides the QUIC host:port the server advertises.";
     };
 
+    localApi = lib.mkOption {
+      type = lib.types.str;
+      default = "127.0.0.1:3388";
+      example = "off";
+      description = ''
+        Where the relay serves its local API, with no auth (loopback
+        addresses only), or "off". The supermatrix-relay CLI on this machine
+        uses it to manage the relay's deployments once "Manage its
+        deployments" is on for the relay in the app. Anything that can run
+        programs here can then do the same.
+      '';
+    };
+
     tokenFile = lib.mkOption {
       type = lib.types.str;
       example = "/run/secrets/supermatrix-relay-token";
@@ -54,6 +67,14 @@ in
       "d ${stateDir} 0755 root root -"
       "d ${stateDir}/bin 0755 root root -"
       "d ${goCache} 0755 root root -"
+    ];
+
+    # The relay binary is also the CLI for its local API.
+    environment.systemPackages = [
+      (pkgs.writeShellScriptBin "supermatrix-relay" ''
+        export SUPERMATRIX_LOCAL_ADDR="''${SUPERMATRIX_LOCAL_ADDR:-${cfg.localApi}}"
+        exec ${relayBin} "$@"
+      '')
     ];
 
     system.activationScripts.supermatrixRelayBuild = {
@@ -95,6 +116,7 @@ in
         SUPERMATRIX_SERVER_URL = cfg.serverUrl;
         SUPERMATRIX_RELAY_TOKEN_FILE = "%d/token";
         SUPERMATRIX_TRANSPORT = cfg.transport;
+        SUPERMATRIX_LOCAL_ADDR = cfg.localApi;
       } // lib.optionalAttrs (cfg.quicAddr != null) {
         SUPERMATRIX_QUIC_ADDR = cfg.quicAddr;
       };

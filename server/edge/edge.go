@@ -110,8 +110,15 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ent := e.reg.ByHost(host)
-	if ent == nil || !ent.Enabled {
+	if ent == nil {
 		message(w, http.StatusNotFound, "Nothing here", "There's no deployment at "+host+".")
+		return
+	}
+	if !ent.Enabled {
+		// The tap is off: a wall for everyone, and nothing reaches the
+		// relay (it isn't even given the target).
+		w.Header().Set("Retry-After", "3600")
+		message(w, http.StatusServiceUnavailable, "Service disabled", host+" is turned off for now.")
 		return
 	}
 	ip := guard.ClientIP(r, e.cfg.TrustProxy)

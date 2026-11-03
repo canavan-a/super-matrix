@@ -123,19 +123,15 @@ func (r *Registry) ByID(id string) *Entry { return r.snap.Load().byID[id] }
 // Targets is what a relay should be forwarding.
 func (r *Registry) Targets(relayID string) []tunnel.Target { return r.snap.Load().byRelay[relayID] }
 
-// HostAllowed reports whether host is an enabled deployment's hostname.
-func (r *Registry) HostAllowed(host string) bool {
-	e := r.ByHost(host)
-	return e != nil && e.Enabled
-}
+// HostAllowed reports whether host is a deployment's hostname. Disabled
+// ones count: they still answer, with the "disabled" page, over HTTPS.
+func (r *Registry) HostAllowed(host string) bool { return r.ByHost(host) != nil }
 
-// Hosts lists the hostnames of every enabled deployment.
+// Hosts lists the hostnames of every deployment, disabled ones included.
 func (r *Registry) Hosts() []string {
 	var out []string
 	for _, e := range r.snap.Load().byID {
-		if e.Enabled {
-			out = append(out, e.Host)
-		}
+		out = append(out, e.Host)
 	}
 	sort.Strings(out)
 	return out

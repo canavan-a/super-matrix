@@ -6,9 +6,9 @@ import {Icon} from '../components/Icon';
 import {isFallback, linkBadge, linkDetails, quicHint} from '../link';
 import {Notice} from '../components/Notice';
 import {Overlay} from '../components/Overlay';
-import {Button, Chips, CopyBox, Divider, Dot, Hint, Input, Label, Title} from '../components/ui';
+import {Button, Chips, CopyBox, Divider, Dot, Hint, Input, Label, Title, ToggleRow} from '../components/ui';
 import {platformConfirm} from '../platformConfirm';
-import {createRelay, deleteRelay, renameRelay, rotateRelay, useStore} from '../store';
+import {createRelay, deleteRelay, renameRelay, rotateRelay, setRelayManage, useStore} from '../store';
 import {Theme, useTheme} from '../theme';
 
 export const REPO = 'github:canavan-a/super-matrix';
@@ -188,6 +188,31 @@ function RelayRow({
               kind="secondary"
               disabled={!newName.trim() || newName.trim() === r.name}
               onPress={() => renameRelay(r.id, newName.trim()).catch(fail)}
+            />
+          </View>
+          <View style={styles.spaced}>
+            <ToggleRow
+              label="Manage its deployments"
+              hint={
+                r.manageDeployments
+                  ? `On ${hostname || 'the relay'}, supermatrix-relay create/list/update/delete manages ${r.name}'s deployments (and only those). Anyone who can run programs there can too.`
+                  : `Lets the relay create, change and delete deployments on itself with its token, from the supermatrix-relay CLI on its machine.`
+              }
+              value={r.manageDeployments}
+              onChange={on => {
+                const apply = () => setRelayManage(r.id, on).catch(fail);
+                if (!on) {
+                  apply();
+                  return;
+                }
+                platformConfirm(
+                  `Let ${r.name} manage its deployments?`,
+                  `Anything that can run programs on ${hostname || 'its machine'} can then create, change (including their sign-in) and delete ${r.name}'s deployments, through the CLI or 127.0.0.1:3388. It can't touch other relays' deployments.`,
+                  'Allow',
+                  apply,
+                  false,
+                );
+              }}
             />
           </View>
           <View style={[styles.row, styles.spaced]}>

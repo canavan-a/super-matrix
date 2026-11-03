@@ -74,10 +74,16 @@ func TestCertRetry(t *testing.T) {
 		}
 	})
 
+	// A disabled deployment keeps its certificate, so its "disabled" page
+	// still loads over HTTPS.
 	t.Run("disabled", func(t *testing.T) {
 		now = now.Add(16 * time.Minute)
 		e.api("PATCH", "/v1/deployments/"+d.ID, map[string]any{"enabled": false}, 200, nil)
-		e.api("POST", path, nil, 409, nil)
+		before := fc.count(d.Host)
+		e.api("POST", path, nil, 202, nil)
+		if fc.count(d.Host) != before+1 {
+			t.Fatalf("warmed %v", fc.warmed)
+		}
 	})
 
 	t.Run("unknown deployment", func(t *testing.T) {

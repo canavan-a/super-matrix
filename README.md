@@ -242,6 +242,31 @@ nothing but the sshd's own auth in front.
 - **In dev:** the `supermatrix` command in `nix develop`, with
   `--url http://%h:8080` for `<name>.localhost` deployments.
 
+## Managing deployments from a relay
+
+Turn on **Manage its deployments** for a relay in the app, and the relay's
+machine can create, change and delete that relay's deployments, and only
+those, without the root password:
+
+```sh
+supermatrix-relay status                                  # is it allowed?
+supermatrix-relay create grafana.example.com http://127.0.0.1:3000 --auth none
+supermatrix-relay list
+supermatrix-relay update grafana.example.com --auth login --password 'correct horse'
+supermatrix-relay token create grafana.example.com ci --expires 30d
+supermatrix-relay delete grafana.example.com
+```
+
+The running relay serves this as a plain HTTP API on `127.0.0.1:3388`, with
+no auth, and passes it on to the server with its own token, so scripts and
+tools on the machine can use it too (`curl 127.0.0.1:3388/deployments`). That
+means anything that can run programs on the relay's machine can manage its
+deployments, including their sign-in; leave it off for relays on machines you
+share. `SUPERMATRIX_LOCAL_ADDR` (`localApi` in the NixOS module) moves it, or
+`off` turns it off. The NixOS module puts `supermatrix-relay` on the PATH;
+`install.sh relay` puts it in `/usr/local/bin`. Details:
+[`docs/protocol.md`](docs/protocol.md#relays-managing-their-deployments).
+
 ## The app
 
 `app/` is the same React Native setup as super-chat: Android (sideloaded APK

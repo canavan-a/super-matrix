@@ -79,6 +79,8 @@ export interface Relay {
   /** how it last connected, and (on the WebSocket) why not QUIC */
   transport: Transport | '';
   fallback: string;
+  /** whether the relay can manage its own deployments (CLI on its machine) */
+  manageDeployments: boolean;
 }
 
 /** A name deployments live on: "*.example.com" (each gets a subdomain) or an exact host like "status.foo.org". */
@@ -221,6 +223,8 @@ export const api = {
     request<{relay: Relay; token: string}>(server, 'POST', '/v1/relays', token, {name}),
   renameRelay: (server: string, token: string, id: string, name: string) =>
     request<Relay>(server, 'PATCH', `/v1/relays/${id}`, token, {name}),
+  setRelayManage: (server: string, token: string, id: string, manageDeployments: boolean) =>
+    request<Relay>(server, 'PATCH', `/v1/relays/${id}`, token, {manageDeployments}),
   deleteRelay: (server: string, token: string, id: string) => request<void>(server, 'DELETE', `/v1/relays/${id}`, token),
   rotateRelay: (server: string, token: string, id: string) => request<{token: string}>(server, 'POST', `/v1/relays/${id}/rotate`, token),
 

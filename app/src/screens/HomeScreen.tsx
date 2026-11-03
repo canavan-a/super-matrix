@@ -1,5 +1,12 @@
 import React, {useRef} from 'react';
-import {ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import {AuthMode, Deployment, Relay, RelayState} from '../api';
 import {Icon, IconName} from '../components/Icon';
@@ -41,7 +48,11 @@ export function healthColor(theme: Theme, h: Health): string {
 }
 
 /** The deployments on this server: what's exposed where, and whether it's up. */
-export function HomeScreen({onNavigate}: {onNavigate: (r: Route) => void}): React.JSX.Element {
+export function HomeScreen({
+  onNavigate,
+}: {
+  onNavigate: (r: Route) => void;
+}): React.JSX.Element {
   const theme = useTheme();
   const styles = makeStyles(theme);
   const loaded = useStore(s => s.loaded);
@@ -61,7 +72,8 @@ export function HomeScreen({onNavigate}: {onNavigate: (r: Route) => void}): Reac
     );
   }
 
-  const relayName = (id: string) => relays.find(r => r.id === id)?.name ?? 'unknown relay';
+  const relayName = (id: string) =>
+    relays.find(r => r.id === id)?.name ?? 'unknown relay';
   const row = (d: Deployment) => (
     <DeploymentRow
       key={d.id}
@@ -87,17 +99,24 @@ export function HomeScreen({onNavigate}: {onNavigate: (r: Route) => void}): Reac
             <Icon name="server" size={28} color={theme.textMuted} />
             <Text style={styles.emptyTitle}>Add your first relay</Text>
             <Text style={styles.emptyText}>
-              A relay runs on the machine next to what you want to expose. It dials out to this server, so it needs no open ports.
+              A relay runs on the machine next to what you want to expose. It
+              dials out to this server, so it needs no open ports.
             </Text>
-            <Button label="Add a relay" icon="plus" onPress={() => onNavigate({name: 'relays'})} style={styles.emptyButton} />
+            <Button
+              label="Add a relay"
+              icon="plus"
+              onPress={() => onNavigate({name: 'relays'})}
+              style={styles.emptyButton}
+            />
           </View>
         ) : deployments.length === 0 ? (
           <View style={styles.empty}>
             <Icon name="globe" size={28} color={theme.textMuted} />
             <Text style={styles.emptyTitle}>Nothing exposed yet</Text>
             <Text style={styles.emptyText}>
-              A deployment puts a service a relay can reach (like http://127.0.0.1:8080) at its own hostname, with its own certificate and
-              sign-in in front.
+              A deployment puts a service a relay can reach (like
+              http://127.0.0.1:8080) at its own hostname, with its own
+              certificate and sign-in in front.
             </Text>
             <Button
               label="New deployment"
@@ -120,8 +139,14 @@ export function HomeScreen({onNavigate}: {onNavigate: (r: Route) => void}): Reac
               {groupBy === 'relay'
                 ? groupByRelay(deployments, relays).map(g => (
                     <View key={g.relay?.id ?? 'unknown'} style={styles.group}>
-                      <RelayHeader name={g.relay?.name ?? 'Unknown relay'} link={g.relay ? live[g.relay.id] : undefined} count={g.items.length} />
-                      {g.items.length === 0 && <Text style={styles.groupEmpty}>No deployments</Text>}
+                      <RelayHeader
+                        name={g.relay?.name ?? 'Unknown relay'}
+                        link={g.relay ? live[g.relay.id] : undefined}
+                        count={g.items.length}
+                      />
+                      {g.items.length === 0 && (
+                        <Text style={styles.groupEmpty}>No deployments</Text>
+                      )}
                       {g.items.map(row)}
                     </View>
                   ))
@@ -142,16 +167,32 @@ export function HomeScreen({onNavigate}: {onNavigate: (r: Route) => void}): Reac
 }
 
 /** Deployments under each relay, relays by name; relays with none get an empty group, and deployments on a relay that's gone come last. */
-export function groupByRelay(deployments: Deployment[], relays: Relay[]): {relay: Relay | null; items: Deployment[]}[] {
+export function groupByRelay(
+  deployments: Deployment[],
+  relays: Relay[],
+): {relay: Relay | null; items: Deployment[]}[] {
   const groups = [...relays]
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map(relay => ({relay: relay as Relay | null, items: deployments.filter(d => d.relayId === relay.id)}));
-  const orphans = deployments.filter(d => !relays.some(r => r.id === d.relayId));
+    .map(relay => ({
+      relay: relay as Relay | null,
+      items: deployments.filter(d => d.relayId === relay.id),
+    }));
+  const orphans = deployments.filter(
+    d => !relays.some(r => r.id === d.relayId),
+  );
   if (orphans.length > 0) groups.push({relay: null, items: orphans});
   return groups;
 }
 
-function RelayHeader({name, link, count}: {name: string; link: RelayState | undefined; count: number}) {
+function RelayHeader({
+  name,
+  link,
+  count,
+}: {
+  name: string;
+  link: RelayState | undefined;
+  count: number;
+}) {
   const theme = useTheme();
   const styles = makeStyles(theme);
   return (
@@ -161,7 +202,12 @@ function RelayHeader({name, link, count}: {name: string; link: RelayState | unde
         {name}
       </Text>
       <Text style={styles.groupMeta} numberOfLines={1}>
-        {[link ? transportBadge(link) : 'offline', count === 1 ? '1 deployment' : `${count} deployments`].filter(Boolean).join(' · ')}
+        {[
+          link ? transportBadge(link) : 'offline',
+          count === 1 ? '1 deployment' : `${count} deployments`,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
       </Text>
     </View>
   );
@@ -188,51 +234,97 @@ function DeploymentRow({
 }) {
   const theme = useTheme();
   const styles = makeStyles(theme);
-  const certNote = tls && d.enabled && d.certStatus !== 'ok' ? (d.certStatus === 'error' ? 'cert error' : 'cert pending') : null;
+  const certNote =
+    tls && d.enabled && d.certStatus !== 'ok'
+      ? d.certStatus === 'error'
+        ? 'cert error'
+        : 'cert pending'
+      : null;
   return (
     <Pressable
-      style={({pressed}) => [styles.row, pressed && styles.rowPressed]}
+      style={({pressed}) => [
+        styles.row,
+        !d.enabled && styles.rowDisabled,
+        pressed && styles.rowPressed,
+      ]}
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={`${d.host}, ${health.detail}`}>
+      accessibilityLabel={
+        d.enabled ? `${d.host}, ${health.detail}` : `${d.host}, disabled`
+      }>
       <View style={styles.rowDot}>
         <Dot color={healthColor(theme, health.health)} />
       </View>
       <View style={styles.rowBody}>
-        <Text style={[styles.host, !d.enabled && styles.muted]} numberOfLines={1}>
+        <Text
+          style={[styles.host, !d.enabled && styles.hostDisabled]}
+          numberOfLines={1}>
           {d.host}
         </Text>
         <Text style={styles.target} numberOfLines={1}>
           {d.protocol}://{d.targetHost}:{d.targetPort} · {relay}
         </Text>
-        <View style={styles.badges}>
-          <View style={styles.badge}>
-            <Icon name={AUTH_ICON[d.authMode]} size={12} color={theme.textMuted} />
-            <Text style={styles.badgeText}>{AUTH_LABEL[d.authMode]}</Text>
-          </View>
-          {link && (
-            <View style={[styles.badge, fallback && styles.badgeWarn]}>
-              <Icon name="globe" size={12} color={fallback ? theme.warning : theme.textMuted} />
-              <Text style={[styles.badgeText, fallback && styles.badgeWarnText]}>{transportBadge(link)}</Text>
+        {!d.enabled ? (
+          <View style={styles.badges}>
+            <View style={[styles.badge, styles.badgeDisabled]}>
+              <Icon name="power-off" size={12} color={theme.text} />
+              <Text style={styles.badgeDisabledText}>DISABLED</Text>
             </View>
-          )}
-          {d.ipAllowlist.length > 0 && (
-            <View style={styles.badge}>
-              <Icon name="shield" size={12} color={theme.textMuted} />
-              <Text style={styles.badgeText}>IP allow list</Text>
-            </View>
-          )}
-          {certNote && (
-            <View style={[styles.badge, d.certStatus === 'error' && styles.badgeWarn]}>
-              <Text style={[styles.badgeText, d.certStatus === 'error' && styles.badgeWarnText]}>{certNote}</Text>
-            </View>
-          )}
-          {health.health !== 'ok' && (
             <Text style={styles.detail} numberOfLines={1}>
-              {health.detail}
+              Visitors see "Service disabled"
             </Text>
-          )}
-        </View>
+          </View>
+        ) : (
+          <View style={styles.badges}>
+            <View style={styles.badge}>
+              <Icon
+                name={AUTH_ICON[d.authMode]}
+                size={12}
+                color={theme.textMuted}
+              />
+              <Text style={styles.badgeText}>{AUTH_LABEL[d.authMode]}</Text>
+            </View>
+            {link && (
+              <View style={[styles.badge, fallback && styles.badgeWarn]}>
+                <Icon
+                  name="globe"
+                  size={12}
+                  color={fallback ? theme.warning : theme.textMuted}
+                />
+                <Text
+                  style={[styles.badgeText, fallback && styles.badgeWarnText]}>
+                  {transportBadge(link)}
+                </Text>
+              </View>
+            )}
+            {d.ipAllowlist.length > 0 && (
+              <View style={styles.badge}>
+                <Icon name="shield" size={12} color={theme.textMuted} />
+                <Text style={styles.badgeText}>IP allow list</Text>
+              </View>
+            )}
+            {certNote && (
+              <View
+                style={[
+                  styles.badge,
+                  d.certStatus === 'error' && styles.badgeWarn,
+                ]}>
+                <Text
+                  style={[
+                    styles.badgeText,
+                    d.certStatus === 'error' && styles.badgeWarnText,
+                  ]}>
+                  {certNote}
+                </Text>
+              </View>
+            )}
+            {health.health !== 'ok' && (
+              <Text style={styles.detail} numberOfLines={1}>
+                {health.detail}
+              </Text>
+            )}
+          </View>
+        )}
       </View>
       <Icon name="chevron-right" size={18} color={theme.textMuted} />
     </Pressable>
@@ -242,8 +334,19 @@ function DeploymentRow({
 function makeStyles(theme: Theme) {
   return StyleSheet.create({
     fill: {flex: 1, backgroundColor: theme.bg},
-    center: {flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.bg},
-    container: {padding: 12, paddingBottom: 48, maxWidth: 720, width: '100%', alignSelf: 'center'},
+    center: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.bg,
+    },
+    container: {
+      padding: 12,
+      paddingBottom: 48,
+      maxWidth: 720,
+      width: '100%',
+      alignSelf: 'center',
+    },
     row: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -256,12 +359,31 @@ function makeStyles(theme: Theme) {
       backgroundColor: theme.surface,
     },
     rowPressed: {backgroundColor: theme.surfaceAlt},
+    // Greyed out: flat background, dashed border, faded.
+    rowDisabled: {
+      backgroundColor: theme.bg,
+      borderStyle: 'dashed',
+      opacity: 0.6,
+    },
+    hostDisabled: {color: theme.textMuted, textDecorationLine: 'line-through'},
+    badgeDisabled: {backgroundColor: theme.border},
+    badgeDisabledText: {
+      fontSize: 11,
+      fontWeight: '800',
+      letterSpacing: 0.6,
+      color: theme.text,
+    },
     rowDot: {alignSelf: 'flex-start', paddingTop: 6},
     rowBody: {flex: 1, minWidth: 0, gap: 3},
     host: {fontSize: 15, fontWeight: '700', color: theme.text},
-    muted: {color: theme.textMuted},
     target: {fontSize: 12, fontFamily: 'monospace', color: theme.textMuted},
-    badges: {flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 4},
+    badges: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: 6,
+      marginTop: 4,
+    },
     badge: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -278,13 +400,45 @@ function makeStyles(theme: Theme) {
     newButton: {marginTop: 8, alignSelf: 'center'},
     list: {marginTop: 12},
     group: {marginBottom: 12},
-    groupHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 4, paddingBottom: 8},
-    groupName: {fontSize: 13, fontWeight: '700', color: theme.text, flexShrink: 1},
+    groupHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 4,
+      paddingBottom: 8,
+    },
+    groupName: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: theme.text,
+      flexShrink: 1,
+    },
     groupMeta: {fontSize: 12, color: theme.textMuted, flexShrink: 1},
-    groupEmpty: {fontSize: 12, color: theme.textMuted, paddingHorizontal: 4, paddingBottom: 4},
-    empty: {alignItems: 'center', paddingVertical: 48, paddingHorizontal: 24, gap: 8},
-    emptyTitle: {fontSize: 16, fontWeight: '700', color: theme.text, marginTop: 4},
-    emptyText: {fontSize: 13, color: theme.textMuted, textAlign: 'center', lineHeight: 19, maxWidth: 360},
+    groupEmpty: {
+      fontSize: 12,
+      color: theme.textMuted,
+      paddingHorizontal: 4,
+      paddingBottom: 4,
+    },
+    empty: {
+      alignItems: 'center',
+      paddingVertical: 48,
+      paddingHorizontal: 24,
+      gap: 8,
+    },
+    emptyTitle: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: theme.text,
+      marginTop: 4,
+    },
+    emptyText: {
+      fontSize: 13,
+      color: theme.textMuted,
+      textAlign: 'center',
+      lineHeight: 19,
+      maxWidth: 360,
+    },
     emptyButton: {marginTop: 12},
   });
 }

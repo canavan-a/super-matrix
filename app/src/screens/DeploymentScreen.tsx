@@ -1,14 +1,45 @@
 import React, {useEffect, useState} from 'react';
-import {Linking, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
+import {
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
-import {AuthMode, Deployment, DeploymentInput, DeploymentToken, Protocol} from '../api';
+import {
+  AuthMode,
+  Deployment,
+  DeploymentInput,
+  DeploymentToken,
+  Protocol,
+} from '../api';
 import {Icon} from '../components/Icon';
 import {transportBadge, viaLine} from '../link';
 import {Notice} from '../components/Notice';
-import {Button, Chips, CopyBox, Divider, Dot, Hint, Input, Label, Title, ToggleRow} from '../components/ui';
+import {
+  Button,
+  Chips,
+  CopyBox,
+  Divider,
+  Dot,
+  Hint,
+  Input,
+  Label,
+  Title,
+  ToggleRow,
+} from '../components/ui';
 import {platformConfirm} from '../platformConfirm';
 import {Route} from '../routes';
-import {createToken, deleteDeployment, deleteToken, deploymentHealth, saveDeployment, useStore} from '../store';
+import {
+  createToken,
+  deleteDeployment,
+  deleteToken,
+  deploymentHealth,
+  saveDeployment,
+  useStore,
+} from '../store';
 import {Theme, useTheme} from '../theme';
 import {AUTH_LABEL, healthColor} from './HomeScreen';
 
@@ -44,7 +75,11 @@ export interface DeploymentForm {
   sshUser: string;
 }
 
-export function formFrom(d: Deployment | null, relayId = '', domainId = ''): DeploymentForm {
+export function formFrom(
+  d: Deployment | null,
+  relayId = '',
+  domainId = '',
+): DeploymentForm {
   return {
     relayId: d?.relayId ?? relayId,
     domainId: d?.domainId ?? domainId,
@@ -106,20 +141,26 @@ export function formToInput(f: DeploymentForm): DeploymentInput {
   return input;
 }
 
-const AUTH_OPTIONS: {value: AuthMode; label: string}[] = [
+/** An auth mode, or "off": the deployment turned off (enabled: false). */
+type AuthChoice = AuthMode | 'off';
+
+const AUTH_OPTIONS: {value: AuthChoice; label: string}[] = [
   {value: 'login', label: AUTH_LABEL.login},
   {value: 'otp', label: AUTH_LABEL.otp},
   {value: 'basic', label: AUTH_LABEL.basic},
   {value: 'token', label: AUTH_LABEL.token},
   {value: 'none', label: 'Public'},
+  {value: 'off', label: 'Disabled'},
 ];
 
 const AUTH_HINT: Record<AuthMode, string> = {
-  login: 'Visitors get a Super Matrix sign-in page and a session cookie for this host only.',
-  otp:
-    "Only addresses on the list get in: they enter their email, get a 6-digit code, and get a session cookie. The service sees who it is in X-Supermatrix-User; its own fetch calls get a 401 with X-Supermatrix-Auth: expired when the session ends.",
-  basic: "The browser's own username and password prompt. Handy for scripts and curl -u.",
-  token: 'No sign-in page: only requests carrying one of the API tokens below get in.',
+  login:
+    'Visitors get a Super Matrix sign-in page and a session cookie for this host only.',
+  otp: 'Only addresses on the list get in: they enter their email, get a 6-digit code, and get a session cookie. The service sees who it is in X-Supermatrix-User; its own fetch calls get a 401 with X-Supermatrix-Auth: expired when the session ends.',
+  basic:
+    "The browser's own username and password prompt. Handy for scripts and curl -u.",
+  token:
+    'No sign-in page: only requests carrying one of the API tokens below get in.',
   none: 'Anyone with the address can reach it. No password.',
 };
 
@@ -132,16 +173,28 @@ const TTL_OPTIONS = [
   {value: 30 * 24 * 3600, label: '30 days'},
 ];
 
-export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigate: (r: Route) => void}): React.JSX.Element {
+export function DeploymentScreen({
+  id,
+  onNavigate,
+}: {
+  id: string | null;
+  onNavigate: (r: Route) => void;
+}): React.JSX.Element {
   const theme = useTheme();
   const styles = makeStyles(theme);
-  const existing = useStore(s => (id ? s.deployments.find(d => d.id === id) ?? null : null));
+  const existing = useStore(s =>
+    id ? s.deployments.find(d => d.id === id) ?? null : null,
+  );
   const relays = useStore(s => s.relays);
   const domains = useStore(s => s.domains);
   const live = useStore(s => s.live);
   const info = useStore(s => s.info);
   const [form, setForm] = useState<DeploymentForm>(() =>
-    formFrom(existing, relays.length === 1 ? relays[0].id : '', (domains.find(d => d.wildcard) ?? domains[0])?.id ?? ''),
+    formFrom(
+      existing,
+      relays.length === 1 ? relays[0].id : '',
+      (domains.find(d => d.wildcard) ?? domains[0])?.id ?? '',
+    ),
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -189,10 +242,17 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
 
   const health = existing ? deploymentHealth(existing, live) : null;
   const domain = domains.find(d => d.id === form.domainId);
-  const publicHost = domain ? (domain.wildcard ? `${form.subdomain.trim().toLowerCase() || 'app'}.${domain.name}` : domain.name) : 'app';
+  const publicHost = domain
+    ? domain.wildcard
+      ? `${form.subdomain.trim().toLowerCase() || 'app'}.${domain.name}`
+      : domain.name
+    : 'app';
 
   return (
-    <ScrollView style={styles.fill} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      style={styles.fill}
+      contentContainerStyle={styles.container}
+      keyboardShouldPersistTaps="handled">
       {existing && health && (
         <View style={styles.card}>
           <View style={styles.cardRow}>
@@ -200,15 +260,23 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
             <Text style={styles.cardHost} numberOfLines={1}>
               {existing.host}
             </Text>
-            <Pressable onPress={() => Linking.openURL(existing.url)} accessibilityLabel="Open in browser" hitSlop={8}>
+            <Pressable
+              onPress={() => Linking.openURL(existing.url)}
+              accessibilityLabel="Open in browser"
+              hitSlop={8}>
               <Icon name="external" size={18} color={theme.primary} />
             </Pressable>
           </View>
           <Text style={styles.cardText}>{health.detail}</Text>
           <Text style={styles.cardText}>
-            {viaLine(relays.find(r => r.id === existing.relayId)?.name ?? 'its relay', live[existing.relayId])}
+            {viaLine(
+              relays.find(r => r.id === existing.relayId)?.name ?? 'its relay',
+              live[existing.relayId],
+            )}
           </Text>
-          {info?.tls && <Text style={styles.cardText}>{certLine(existing)}</Text>}
+          {info?.tls && (
+            <Text style={styles.cardText}>{certLine(existing)}</Text>
+          )}
         </View>
       )}
 
@@ -221,16 +289,28 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
           {domains.map(d => (
             <Pressable
               key={d.id}
-              style={[styles.relayChip, form.domainId === d.id && styles.relayChipOn]}
+              style={[
+                styles.relayChip,
+                form.domainId === d.id && styles.relayChipOn,
+              ]}
               onPress={() => set({domainId: d.id})}
               accessibilityRole="radio"
               accessibilityState={{selected: form.domainId === d.id}}>
-              <Text style={[styles.relayChipText, form.domainId === d.id && styles.relayChipTextOn]}>{d.label}</Text>
+              <Text
+                style={[
+                  styles.relayChipText,
+                  form.domainId === d.id && styles.relayChipTextOn,
+                ]}>
+                {d.label}
+              </Text>
             </Pressable>
           ))}
         </View>
       )}
-      <Pressable onPress={() => onNavigate({name: 'domains'})} accessibilityRole="link" hitSlop={6}>
+      <Pressable
+        onPress={() => onNavigate({name: 'domains'})}
+        accessibilityRole="link"
+        hitSlop={6}>
         <Text style={styles.link}>Manage domains</Text>
       </Pressable>
 
@@ -251,8 +331,15 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
           </View>
         </>
       )}
-      {domain && !domain.wildcard && <Hint>This deployment answers on {domain.name} itself. An exact domain holds one deployment.</Hint>}
-      <Hint>Gets its own Let's Encrypt certificate the first time it's used.</Hint>
+      {domain && !domain.wildcard && (
+        <Hint>
+          This deployment answers on {domain.name} itself. An exact domain holds
+          one deployment.
+        </Hint>
+      )}
+      <Hint>
+        Gets its own Let's Encrypt certificate the first time it's used.
+      </Hint>
 
       <Label spaced>Relay</Label>
       {relays.length === 0 ? (
@@ -262,14 +349,29 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
           {relays.map(r => (
             <Pressable
               key={r.id}
-              style={[styles.relayChip, form.relayId === r.id && styles.relayChipOn]}
+              style={[
+                styles.relayChip,
+                form.relayId === r.id && styles.relayChipOn,
+              ]}
               onPress={() => set({relayId: r.id})}
               accessibilityRole="radio"
               accessibilityState={{selected: form.relayId === r.id}}>
               <Dot color={live[r.id] ? theme.success : theme.textMuted} />
-              <Text style={[styles.relayChipText, form.relayId === r.id && styles.relayChipTextOn]}>{r.name}</Text>
+              <Text
+                style={[
+                  styles.relayChipText,
+                  form.relayId === r.id && styles.relayChipTextOn,
+                ]}>
+                {r.name}
+              </Text>
               {live[r.id] ? (
-                <Text style={[styles.relayChipMeta, form.relayId === r.id && styles.relayChipMetaOn]}>{transportBadge(live[r.id])}</Text>
+                <Text
+                  style={[
+                    styles.relayChipMeta,
+                    form.relayId === r.id && styles.relayChipMetaOn,
+                  ]}>
+                  {transportBadge(live[r.id])}
+                </Text>
               ) : null}
             </Pressable>
           ))}
@@ -307,7 +409,10 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
         />
       </View>
       {form.protocol === 'ssh' && (
-        <Hint>The sshd the relay connects to, from its own machine: 127.0.0.1:22 for the relay's own, or another host on its network.</Hint>
+        <Hint>
+          The sshd the relay connects to, from its own machine: 127.0.0.1:22 for
+          the relay's own, or another host on its network.
+        </Hint>
       )}
       {form.protocol === 'https' && (
         <>
@@ -318,7 +423,11 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
             onChange={v => set({tlsSkipVerify: v})}
           />
           <Label>Server name (SNI)</Label>
-          <Input value={form.sni} onChangeText={v => set({sni: v})} placeholder="Defaults to the target host" />
+          <Input
+            value={form.sni}
+            onChangeText={v => set({sni: v})}
+            placeholder="Defaults to the target host"
+          />
         </>
       )}
       {form.protocol !== 'ssh' && (
@@ -331,120 +440,177 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
           onChange={v => set({preserveHost: v})}
         />
       )}
-      {id && (
-        <ToggleRow label="Enabled" hint="Off answers 404 and stops forwarding." value={form.enabled} onChange={v => set({enabled: v})} />
+      {form.protocol === 'ssh' && (
+        <SSHAccess
+          form={form}
+          set={set}
+          existing={existing}
+          host={existing?.host ?? publicHost}
+        />
       )}
-
-      {form.protocol === 'ssh' && <SSHAccess form={form} set={set} existing={existing} host={existing?.host ?? publicHost} />}
 
       <Divider />
       <Title>Who gets in</Title>
-      <Chips
-        options={form.protocol === 'ssh' ? AUTH_OPTIONS.filter(o => o.value !== 'basic') : AUTH_OPTIONS}
-        value={form.authMode}
-        onChange={v => set({authMode: v})}
+      {/* "Disabled" is the enabled flag, not an auth mode: picking it keeps
+          the sign-in below, so turning it back on restores it as it was. */}
+      <Chips<AuthChoice>
+        options={
+          form.protocol === 'ssh'
+            ? AUTH_OPTIONS.filter(o => o.value !== 'basic')
+            : AUTH_OPTIONS
+        }
+        value={form.enabled ? form.authMode : 'off'}
+        onChange={v =>
+          v === 'off'
+            ? set({enabled: false})
+            : set({enabled: true, authMode: v})
+        }
       />
-      {form.protocol === 'ssh' && form.authMode === 'none' && (
-        <Notice kind="error" title="Anyone can reach this sshd">
-          Public means no Super Matrix sign-in in front: it's like opening port 22 to the internet, and only the server's own passwords
-          or keys stand in the way. Prefer Login or Email code.
+      {!form.enabled ? (
+        <Notice kind="info" title="This service is disabled">
+          Nobody gets in: every visitor, token and SSH client gets a "Service
+          disabled" page, and the relay stops forwarding to{' '}
+          {form.targetHost || 'the target'}. Pick a sign-in above to turn it
+          back on; the {AUTH_LABEL[form.authMode]} settings are kept.
         </Notice>
-      )}
-      {form.protocol === 'ssh' && form.authMode !== 'none' && (
-        <Hint>
-          {form.authMode === 'token'
-            ? 'The CLI connects with SUPERMATRIX_TOKEN_FILE set to one of the tokens below; the browser shell is unusable.'
-            : 'The same sign-in guards the shell and the CLI: `supermatrix access` opens it in the browser, then remembers the session.'}
-        </Hint>
-      )}
-      <Hint>{AUTH_HINT[form.authMode]}</Hint>
-
-      {form.authMode === 'login' && (
+      ) : (
         <>
-          <Label spaced>Password</Label>
-          <Input
-            value={form.loginPassword}
-            onChangeText={v => set({loginPassword: v, clearLoginPassword: false})}
-            secureTextEntry
-            placeholder={
-              existing?.hasLoginPassword && !form.clearLoginPassword
-                ? 'Leave blank to keep the current one'
-                : 'A password for this deployment'
-            }
-            accessibilityLabel="Login password"
-          />
-          {existing?.hasLoginPassword && !form.clearLoginPassword && !form.loginPassword && (
-            <Button label="Remove password" kind="secondary" onPress={() => set({clearLoginPassword: true})} style={styles.spacedSmall} />
-          )}
-          {form.clearLoginPassword && <Hint>The password is removed when you save; only the root password will work.</Hint>}
-          <ToggleRow
-            label="Root password works too"
-            hint="Sign in here with the server's root password as well."
-            value={form.allowRootLogin}
-            onChange={v => set({allowRootLogin: v})}
-          />
-          <Label>Stay signed in for</Label>
-          <Chips options={TTL_OPTIONS} value={form.sessionTtlS} onChange={v => set({sessionTtlS: v})} />
-        </>
-      )}
-
-      {form.authMode === 'otp' && (
-        <>
-          {info && !info.smtp && (
-            <Notice kind="info" title="Email isn't set up on the server">
-              Codes can't be sent until the server has SMTP: SUPERMATRIX_SMTP_EMAIL and SUPERMATRIX_SMTP_APP_PASSWORD in its
-              environment file.
+          {form.protocol === 'ssh' && form.authMode === 'none' && (
+            <Notice kind="error" title="Anyone can reach this sshd">
+              Public means no Super Matrix sign-in in front: it's like opening
+              port 22 to the internet, and only the server's own passwords or
+              keys stand in the way. Prefer Login or Email code.
             </Notice>
           )}
-          <Label spaced>Who can sign in</Label>
-          <Input
-            value={form.otpEmails}
-            onChangeText={v => set({otpEmails: v})}
-            multiline
-            mono
-            keyboardType="email-address"
-            placeholder={'ann@example.com\nbob@example.com'}
-            style={styles.multiline}
-            accessibilityLabel="Email addresses that can sign in"
-          />
-          <Hint>
-            One address per line, or *@example.com for everyone at a domain. Taking one off signs that person out.
-          </Hint>
-          <Label>Stay signed in for</Label>
-          <Chips options={TTL_OPTIONS} value={form.sessionTtlS} onChange={v => set({sessionTtlS: v})} />
-          <Hint>After this they're asked for a new code.</Hint>
-        </>
-      )}
+          {form.protocol === 'ssh' && form.authMode !== 'none' && (
+            <Hint>
+              {form.authMode === 'token'
+                ? 'The CLI connects with SUPERMATRIX_TOKEN_FILE set to one of the tokens below; the browser shell is unusable.'
+                : 'The same sign-in guards the shell and the CLI: `supermatrix access` opens it in the browser, then remembers the session.'}
+            </Hint>
+          )}
+          <Hint>{AUTH_HINT[form.authMode]}</Hint>
 
-      {form.authMode === 'basic' && (
-        <>
-          <Label spaced>Username</Label>
-          <Input
-            value={form.basicUser}
-            onChangeText={v => set({basicUser: v})}
-            placeholder="admin"
-            accessibilityLabel="Basic auth username"
-          />
-          <Label spaced>Password</Label>
-          <Input
-            value={form.basicPassword}
-            onChangeText={v => set({basicPassword: v})}
-            secureTextEntry
-            placeholder={existing?.hasBasicPassword ? 'Leave blank to keep the current one' : 'At least 8 characters'}
-            accessibilityLabel="Basic auth password"
-          />
-        </>
-      )}
+          {form.authMode === 'login' && (
+            <>
+              <Label spaced>Password</Label>
+              <Input
+                value={form.loginPassword}
+                onChangeText={v =>
+                  set({loginPassword: v, clearLoginPassword: false})
+                }
+                secureTextEntry
+                placeholder={
+                  existing?.hasLoginPassword && !form.clearLoginPassword
+                    ? 'Leave blank to keep the current one'
+                    : 'A password for this deployment'
+                }
+                accessibilityLabel="Login password"
+              />
+              {existing?.hasLoginPassword &&
+                !form.clearLoginPassword &&
+                !form.loginPassword && (
+                  <Button
+                    label="Remove password"
+                    kind="secondary"
+                    onPress={() => set({clearLoginPassword: true})}
+                    style={styles.spacedSmall}
+                  />
+                )}
+              {form.clearLoginPassword && (
+                <Hint>
+                  The password is removed when you save; only the root password
+                  will work.
+                </Hint>
+              )}
+              <ToggleRow
+                label="Root password works too"
+                hint="Sign in here with the server's root password as well."
+                value={form.allowRootLogin}
+                onChange={v => set({allowRootLogin: v})}
+              />
+              <Label>Stay signed in for</Label>
+              <Chips
+                options={TTL_OPTIONS}
+                value={form.sessionTtlS}
+                onChange={v => set({sessionTtlS: v})}
+              />
+            </>
+          )}
 
-      {form.authMode !== 'none' && (
-        <>
-          <Label spaced>API tokens</Label>
-          <Hint>
-            {form.authMode === 'token'
-              ? 'The only way in: Authorization: Bearer <token>, or an X-Supermatrix-Token header.'
-              : 'For scripts and services: a request with a token (Authorization: Bearer <token>, or an X-Supermatrix-Token header) skips the sign-in above.'}
-          </Hint>
-          {existing ? <Tokens d={existing} tokenOnly={form.authMode === 'token'} /> : <Hint>Save first, then make tokens here.</Hint>}
+          {form.authMode === 'otp' && (
+            <>
+              {info && !info.smtp && (
+                <Notice kind="info" title="Email isn't set up on the server">
+                  Codes can't be sent until the server has SMTP:
+                  SUPERMATRIX_SMTP_EMAIL and SUPERMATRIX_SMTP_APP_PASSWORD in
+                  its environment file.
+                </Notice>
+              )}
+              <Label spaced>Who can sign in</Label>
+              <Input
+                value={form.otpEmails}
+                onChangeText={v => set({otpEmails: v})}
+                multiline
+                mono
+                keyboardType="email-address"
+                placeholder={'ann@example.com\nbob@example.com'}
+                style={styles.multiline}
+                accessibilityLabel="Email addresses that can sign in"
+              />
+              <Hint>
+                One address per line, or *@example.com for everyone at a domain.
+                Taking one off signs that person out.
+              </Hint>
+              <Label>Stay signed in for</Label>
+              <Chips
+                options={TTL_OPTIONS}
+                value={form.sessionTtlS}
+                onChange={v => set({sessionTtlS: v})}
+              />
+              <Hint>After this they're asked for a new code.</Hint>
+            </>
+          )}
+
+          {form.authMode === 'basic' && (
+            <>
+              <Label spaced>Username</Label>
+              <Input
+                value={form.basicUser}
+                onChangeText={v => set({basicUser: v})}
+                placeholder="admin"
+                accessibilityLabel="Basic auth username"
+              />
+              <Label spaced>Password</Label>
+              <Input
+                value={form.basicPassword}
+                onChangeText={v => set({basicPassword: v})}
+                secureTextEntry
+                placeholder={
+                  existing?.hasBasicPassword
+                    ? 'Leave blank to keep the current one'
+                    : 'At least 8 characters'
+                }
+                accessibilityLabel="Basic auth password"
+              />
+            </>
+          )}
+
+          {form.authMode !== 'none' && (
+            <>
+              <Label spaced>API tokens</Label>
+              <Hint>
+                {form.authMode === 'token'
+                  ? 'The only way in: Authorization: Bearer <token>, or an X-Supermatrix-Token header.'
+                  : 'For scripts and services: a request with a token (Authorization: Bearer <token>, or an X-Supermatrix-Token header) skips the sign-in above.'}
+              </Hint>
+              {existing ? (
+                <Tokens d={existing} tokenOnly={form.authMode === 'token'} />
+              ) : (
+                <Hint>Save first, then make tokens here.</Hint>
+              )}
+            </>
+          )}
         </>
       )}
 
@@ -458,7 +624,10 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
         style={styles.multiline}
         accessibilityLabel="IP allow list"
       />
-      <Hint>One address or CIDR range per line, checked before any sign-in. Empty lets every address try.</Hint>
+      <Hint>
+        One address or CIDR range per line, checked before any sign-in. Empty
+        lets every address try.
+      </Hint>
 
       {error ? (
         <Notice kind="error" title="Not saved">
@@ -467,7 +636,13 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
       ) : null}
       {saved && !error ? <Notice kind="success" title="Saved" /> : null}
 
-      <Button label={id ? 'Save' : 'Create deployment'} onPress={save} busy={busy} disabled={!form.relayId} style={styles.save} />
+      <Button
+        label={id ? 'Save' : 'Create deployment'}
+        onPress={save}
+        busy={busy}
+        disabled={!form.relayId}
+        style={styles.save}
+      />
 
       {id && (
         <>
@@ -480,10 +655,14 @@ export function DeploymentScreen({id, onNavigate}: {id: string | null; onNavigat
 }
 
 /** Switching protocol: suggest the usual port, and leave basic auth, which ssh can't use. */
-export function protocolPatch(f: DeploymentForm, protocol: Protocol): Partial<DeploymentForm> {
+export function protocolPatch(
+  f: DeploymentForm,
+  protocol: Protocol,
+): Partial<DeploymentForm> {
   const patch: Partial<DeploymentForm> = {protocol};
   if (protocol === 'ssh') {
-    if (!f.targetPort || f.targetPort === '80' || f.targetPort === '443') patch.targetPort = '22';
+    if (!f.targetPort || f.targetPort === '80' || f.targetPort === '443')
+      patch.targetPort = '22';
     if (f.authMode === 'basic') patch.authMode = 'login';
   } else if (f.protocol === 'ssh' && f.targetPort === '22') {
     patch.targetPort = '';
@@ -512,7 +691,10 @@ function SSHAccess({
       'Forget the host key?',
       'The shell trusts whatever key the server shows next. Only do this if you know why it changed, e.g. the machine was reinstalled.',
       'Forget',
-      () => saveDeployment(existing!.id, {sshHostKey: ''}).catch(e => setError((e as Error).message)),
+      () =>
+        saveDeployment(existing!.id, {sshHostKey: ''}).catch(e =>
+          setError((e as Error).message),
+        ),
     );
 
   return (
@@ -526,7 +708,10 @@ function SSHAccess({
         onChange={v => set({sshCli: v})}
       />
       {form.sshCli && (
-        <CopyBox text={`Host ${host}\n  ProxyCommand supermatrix access %h`} label="~/.ssh/config" />
+        <CopyBox
+          text={`Host ${host}\n  ProxyCommand supermatrix access %h`}
+          label="~/.ssh/config"
+        />
       )}
       <ToggleRow
         label="Browser shell"
@@ -537,17 +722,28 @@ function SSHAccess({
       {form.sshShell && (
         <>
           <Label>Suggested username</Label>
-          <Input value={form.sshUser} onChangeText={v => set({sshUser: v})} placeholder="Optional, e.g. root" autoCapitalize="none" />
+          <Input
+            value={form.sshUser}
+            onChangeText={v => set({sshUser: v})}
+            placeholder="Optional, e.g. root"
+            autoCapitalize="none"
+          />
           <Label spaced>Host key</Label>
           {existing?.sshHostKey ? (
             <View style={styles.subRow}>
-              <Text style={[styles.flex, styles.mono]} selectable numberOfLines={2}>
+              <Text
+                style={[styles.flex, styles.mono]}
+                selectable
+                numberOfLines={2}>
                 {existing.sshHostKey}
               </Text>
               <Button label="Forget" kind="secondary" onPress={resetKey} />
             </View>
           ) : (
-            <Hint>Saved the first time the shell connects, and checked every time after.</Hint>
+            <Hint>
+              Saved the first time the shell connects, and checked every time
+              after.
+            </Hint>
           )}
         </>
       )}
@@ -559,9 +755,13 @@ function SSHAccess({
 function certLine(d: Deployment): string {
   switch (d.certStatus) {
     case 'ok':
-      return `Certificate valid until ${d.certExpiresAt ? new Date(d.certExpiresAt).toLocaleDateString() : '?'}`;
+      return `Certificate valid until ${
+        d.certExpiresAt ? new Date(d.certExpiresAt).toLocaleDateString() : '?'
+      }`;
     case 'error':
-      return `Certificate failed: ${d.certError || 'unknown error'}. Check DNS points at the server; it retries every 12 hours.`;
+      return `Certificate failed: ${
+        d.certError || 'unknown error'
+      }. Check DNS points at the server; it retries every 12 hours.`;
     case 'off':
       return 'TLS is off on this server';
     default:
@@ -581,10 +781,14 @@ const TOKEN_EXPIRY_OPTIONS = [
 ];
 
 function tokenMeta(t: DeploymentToken): string {
-  const used = t.lastUsedAt ? `last used ${new Date(t.lastUsedAt).toLocaleString()}` : 'never used';
+  const used = t.lastUsedAt
+    ? `last used ${new Date(t.lastUsedAt).toLocaleString()}`
+    : 'never used';
   if (!t.expiresAt) return used;
   const exp = new Date(t.expiresAt);
-  return exp.getTime() <= Date.now() ? `expired ${exp.toLocaleString()} · ${used}` : `expires ${exp.toLocaleString()} · ${used}`;
+  return exp.getTime() <= Date.now()
+    ? `expired ${exp.toLocaleString()} · ${used}`
+    : `expires ${exp.toLocaleString()} · ${used}`;
 }
 
 function Tokens({d, tokenOnly}: {d: Deployment; tokenOnly: boolean}) {
@@ -611,7 +815,11 @@ function Tokens({d, tokenOnly}: {d: Deployment; tokenOnly: boolean}) {
 
   return (
     <View style={styles.tokens}>
-      {d.tokens.length === 0 && <Hint>{tokenOnly ? 'No tokens yet: nothing can get in.' : 'No tokens yet.'}</Hint>}
+      {d.tokens.length === 0 && (
+        <Hint>
+          {tokenOnly ? 'No tokens yet: nothing can get in.' : 'No tokens yet.'}
+        </Hint>
+      )}
       {d.tokens.map(t => (
         <View key={t.id} style={styles.tokenRow}>
           <View style={styles.flex}>
@@ -620,8 +828,14 @@ function Tokens({d, tokenOnly}: {d: Deployment; tokenOnly: boolean}) {
           </View>
           <Pressable
             onPress={() =>
-              platformConfirm(`Revoke ${t.name}?`, 'Anything using this token stops getting in.', 'Revoke', () =>
-                deleteToken(d.id, t.id).catch(e => setError((e as Error).message)),
+              platformConfirm(
+                `Revoke ${t.name}?`,
+                'Anything using this token stops getting in.',
+                'Revoke',
+                () =>
+                  deleteToken(d.id, t.id).catch(e =>
+                    setError((e as Error).message),
+                  ),
               )
             }
             accessibilityLabel={`Revoke ${t.name}`}
@@ -631,20 +845,48 @@ function Tokens({d, tokenOnly}: {d: Deployment; tokenOnly: boolean}) {
         </View>
       ))}
       <View style={[styles.subRow, styles.spaced]}>
-        <Input style={styles.flex} value={name} onChangeText={setName} placeholder="Token name, e.g. ci" onSubmitEditing={add} />
-        <Button label="Add" kind="secondary" onPress={add} busy={busy} disabled={!name.trim()} />
+        <Input
+          style={styles.flex}
+          value={name}
+          onChangeText={setName}
+          placeholder="Token name, e.g. ci"
+          onSubmitEditing={add}
+        />
+        <Button
+          label="Add"
+          kind="secondary"
+          onPress={add}
+          busy={busy}
+          disabled={!name.trim()}
+        />
       </View>
       <Label>New token expires</Label>
-      <Chips options={TOKEN_EXPIRY_OPTIONS} value={expiresInS} onChange={setExpiresInS} />
-      <Hint>An expired token gets a 401 with X-Supermatrix-Auth: token_expired, never the sign-in page. Revoke and add a new one to rotate.</Hint>
+      <Chips
+        options={TOKEN_EXPIRY_OPTIONS}
+        value={expiresInS}
+        onChange={setExpiresInS}
+      />
+      <Hint>
+        An expired token gets a 401 with X-Supermatrix-Auth: token_expired,
+        never the sign-in page. Revoke and add a new one to rotate.
+      </Hint>
       {fresh && (
         <>
-          <Notice kind="success" title="New token: copy it now, it won't be shown again" />
+          <Notice
+            kind="success"
+            title="New token: copy it now, it won't be shown again"
+          />
           <CopyBox text={fresh} label="token" />
           {d.protocol === 'ssh' ? (
-            <CopyBox text={`SUPERMATRIX_TOKEN=${fresh} supermatrix access ${d.host}`} label="CLI example" />
+            <CopyBox
+              text={`SUPERMATRIX_TOKEN=${fresh} supermatrix access ${d.host}`}
+              label="CLI example"
+            />
           ) : (
-            <CopyBox text={`curl -H "Authorization: Bearer ${fresh}" ${d.url}/`} label="curl example" />
+            <CopyBox
+              text={`curl -H "Authorization: Bearer ${fresh}" ${d.url}/`}
+              label="curl example"
+            />
           )}
         </>
       )}
@@ -656,7 +898,13 @@ function Tokens({d, tokenOnly}: {d: Deployment; tokenOnly: boolean}) {
 function makeStyles(theme: Theme) {
   return StyleSheet.create({
     fill: {flex: 1, backgroundColor: theme.bg},
-    container: {padding: 20, paddingBottom: 48, maxWidth: 560, width: '100%', alignSelf: 'center'},
+    container: {
+      padding: 20,
+      paddingBottom: 48,
+      maxWidth: 560,
+      width: '100%',
+      alignSelf: 'center',
+    },
     card: {
       padding: 14,
       borderRadius: 10,
@@ -671,7 +919,12 @@ function makeStyles(theme: Theme) {
     cardText: {fontSize: 12, color: theme.textMuted, lineHeight: 17},
     subRow: {flexDirection: 'row', alignItems: 'center', gap: 6},
     flex: {flex: 1, minWidth: 0},
-    suffix: {fontSize: 14, color: theme.textMuted, fontFamily: 'monospace', flexShrink: 1},
+    suffix: {
+      fontSize: 14,
+      color: theme.textMuted,
+      fontFamily: 'monospace',
+      flexShrink: 1,
+    },
     colon: {fontSize: 16, color: theme.textMuted},
     port: {width: 90},
     spaced: {marginTop: 10},

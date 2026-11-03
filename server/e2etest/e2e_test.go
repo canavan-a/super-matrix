@@ -430,8 +430,13 @@ func TestEndToEnd(t *testing.T) {
 			t.Fatalf("unknown host: %d", res.StatusCode)
 		}
 		e.api("PATCH", "/v1/deployments/"+d.ID, map[string]any{"enabled": false}, 200, nil)
-		if res := e.req("GET", "app.test", "/", nil, nil); res.StatusCode != 404 {
-			t.Fatalf("disabled: %d", res.StatusCode)
+		// Off: a wall instead of the service.
+		res := e.req("GET", "app.test", "/", nil, nil)
+		if body := readBody(t, res); res.StatusCode != 503 || !strings.Contains(body, "Service disabled") || strings.Contains(body, `"path"`) {
+			t.Fatalf("disabled: %d %s", res.StatusCode, body)
+		}
+		if res.Header.Get("Retry-After") == "" {
+			t.Fatal("no Retry-After")
 		}
 		e.api("PATCH", "/v1/deployments/"+d.ID, map[string]any{"enabled": true}, 200, nil)
 	})

@@ -1,5 +1,5 @@
 // Package certs gets a Let's Encrypt certificate for every hostname the
-// server answers for: the admin host and each enabled deployment. There is
+// server answers for: the admin host and each deployment. There is
 // no wildcard cert; each host gets its own, issued on first use (or when
 // warmed after a deployment is created) and renewed by autocert.
 package certs
@@ -26,7 +26,7 @@ import (
 type Manager struct {
 	m   *autocert.Manager
 	cfg config.Config
-	// Allowed reports whether host is an enabled deployment.
+	// Allowed reports whether host is a deployment (disabled ones too).
 	allowed func(host string) bool
 	// OnStatus is told the outcome of each warm-up.
 	OnStatus func(host string, expires time.Time, err error)

@@ -278,6 +278,8 @@ func dial(ctx context.Context, t target) (net.Conn, error) {
 		return nil, fmt.Errorf("%s: not allowed from this address", t.key())
 	case res.StatusCode == http.StatusNotFound:
 		return nil, fmt.Errorf("%s isn't an SSH deployment with CLI access on", t.key())
+	case res.StatusCode == http.StatusServiceUnavailable:
+		return nil, fmt.Errorf("%s is disabled", t.key())
 	case body.Error != "":
 		return nil, fmt.Errorf("%s: %s", t.key(), body.Error)
 	}

@@ -12,6 +12,7 @@ import {
   Lock,
   LogOut,
   Mail,
+  PowerOff,
   LucideIcon,
   Plus,
   RefreshCw,
@@ -43,6 +44,7 @@ export type IconName =
   | 'external'
   | 'key'
   | 'logout'
+  | 'power-off'
   | 'mail';
 
 const ICONS: Record<IconName, LucideIcon> = {
@@ -66,6 +68,7 @@ const ICONS: Record<IconName, LucideIcon> = {
   key: KeyRound,
   logout: LogOut,
   mail: Mail,
+  'power-off': PowerOff,
 };
 
 export function Icon({
@@ -80,5 +83,12 @@ export function Icon({
   strokeWidth?: number;
 }): React.JSX.Element {
   const IconComponent = ICONS[name];
-  return <IconComponent size={size} color={color} strokeWidth={strokeWidth} fill="none" />;
+  return (
+    <IconComponent
+      size={size}
+      color={color}
+      strokeWidth={strokeWidth}
+      fill="none"
+    />
+  );
 }

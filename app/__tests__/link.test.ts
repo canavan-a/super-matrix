@@ -13,6 +13,7 @@ const relay = (over: Partial<Relay> = {}): Relay => ({
   deployments: 0,
   transport: '',
   fallback: '',
+  manageDeployments: false,
   ...over,
 });
 

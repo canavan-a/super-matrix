@@ -24,6 +24,9 @@ type Relay struct {
 	// that wasn't QUIC.
 	Transport string
 	Fallback  string
+	// ManageDeployments lets the relay create, read, update and delete its
+	// own deployments with its token (/v1/relay/*); off by default.
+	ManageDeployments bool
 }
 
 // Auth modes a deployment can sit behind.
