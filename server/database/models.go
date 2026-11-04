@@ -89,12 +89,20 @@ type Deployment struct {
 	SSHUser  string `gorm:"column:ssh_user"`
 	// SSHHostKey is the target's host key fingerprint (SHA256:…), saved the
 	// first time the shell connects; "" until then.
-	SSHHostKey    string `gorm:"column:ssh_host_key"`
-	CertStatus    string
-	CertExpiresAt *time.Time
-	CertError     string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	SSHHostKey string `gorm:"column:ssh_host_key"`
+	// RateLimitEnabled caps requests from a single client IP to this
+	// deployment at the edge. RateLimitPeriodS is the sustained window's
+	// length in seconds (60 = "per minute", 1 = "per second");
+	// RateLimitBurst, if > 0, additionally caps a short 1s window.
+	RateLimitEnabled  bool `gorm:"column:rate_limit_enabled"`
+	RateLimitRequests int  `gorm:"column:rate_limit_requests"`
+	RateLimitPeriodS  int  `gorm:"column:rate_limit_period_s"`
+	RateLimitBurst    int  `gorm:"column:rate_limit_burst"`
+	CertStatus        string
+	CertExpiresAt     *time.Time
+	CertError         string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type DeploymentToken struct {

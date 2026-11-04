@@ -12,7 +12,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import {SafeAreaProvider, useSafeAreaInsets} from 'react-native-safe-area-context';
+import {initialWindowMetrics, SafeAreaProvider, useSafeAreaInsets} from 'react-native-safe-area-context';
 
 import {useThemedAppIcon} from './appIcon';
 import {CrashScreen} from './components/CrashScreen';
@@ -318,7 +318,7 @@ function SystemBars({children}: {children: React.ReactNode}): React.JSX.Element 
 function App(): React.JSX.Element {
   return (
     <CrashScreen>
-      <SafeAreaProvider>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
         <ThemeProvider>
           <ThemeChrome />
           <SystemBars>

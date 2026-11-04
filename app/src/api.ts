@@ -143,6 +143,13 @@ export interface Deployment {
   sshUser: string;
   /** the target's host key (SHA256:…), saved the first time the shell connects; "" until then */
   sshHostKey: string;
+  /** caps requests from a single client address */
+  rateLimitEnabled: boolean;
+  rateLimitRequests: number;
+  /** the window's length in seconds: 60 = per minute, 1 = per second */
+  rateLimitPeriodS: number;
+  /** extra requests allowed in a short 1s burst on top of the sustained rate; 0 = none */
+  rateLimitBurst: number;
   certStatus: CertStatus;
   certExpiresAt: string | null;
   certError: string;
@@ -176,6 +183,10 @@ export interface DeploymentInput {
   sshUser?: string;
   /** only "": forget the saved host key so the next one is trusted */
   sshHostKey?: '';
+  rateLimitEnabled?: boolean;
+  rateLimitRequests?: number;
+  rateLimitPeriodS?: number;
+  rateLimitBurst?: number;
 }
 
 /** A connected relay's live state (/v1/status, and the WebSocket). */

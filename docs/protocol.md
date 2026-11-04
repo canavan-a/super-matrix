@@ -167,7 +167,14 @@ Checked in this order:
    it, the answer is 403. The visitor's address is the TCP peer, or with
    `SUPERMATRIX_TRUST_PROXY=1` the rightmost `X-Forwarded-For` on loopback
    connections.
-3. **Auth mode:**
+3. **Rate limit**, per deployment and per client address (the same address
+   the IP allow list checks). Off by default; when on, a sustained rate
+   (requests per second or per minute) and, optionally, a short extra burst
+   allowance on top of it. An address over either gets 429 with
+   `Retry-After` (the sustained window's length, in seconds). Each
+   deployment's budget is its own — it isn't shared with other deployments
+   on the same domain.
+4. **Auth mode:**
    - `none`: public.
    - `login`: `/_supermatrix/login` on the deployment's own host shows a
      sign-in page. It accepts the deployment's password (bcrypt), and the root
@@ -213,7 +220,7 @@ Checked in this order:
    there instead, with `&expired=1` when the session ran out.
    `/_supermatrix/session` answers `{"signedIn": true, "email", "expiresAt"}`
    or a 401, for front ends that want to warn before a session ends.
-4. The Super Matrix cookie, `Authorization` (when it held basic-auth
+5. The Super Matrix cookie, `Authorization` (when it held basic-auth
    credentials or a deployment token) and `X-Supermatrix-Token` (when it
    held a deployment token) are removed before the request goes upstream.
 
@@ -312,7 +319,7 @@ tokens, below) and `ws` needs `Authorization: Bearer sms_…`.
 | `POST /v1/relays/:id/rotate` | new token (shown once); the old one stops working and the relay is disconnected |
 | `GET/POST /v1/domains {name}`, `DELETE /v1/domains/:id` | domains: `name` is `*.example.com` (wildcard) or `status.foo.org` (exact). A domain in use can't be deleted |
 | `GET /v1/domains/:id/dns` | whether the domain (for a wildcard, a random name under it) resolves to the same addresses as the admin host: `{ok, probe, addresses, expected, detail}` |
-| `GET/POST /v1/deployments`, `GET/PATCH/DELETE /v1/deployments/:id` | deployments (`domainId` + `subdomain`, which is ignored on an exact domain). Passwords go in as plaintext (`loginPassword`, `basicPassword`, at least 8 characters; `""` clears one) and are stored as bcrypt hashes. `protocol` is `http`, `https` or `ssh`; ssh deployments also have `sshCli`, `sshShell`, `sshUser` and the read-only `sshHostKey` (PATCH `""` forgets it) |
+| `GET/POST /v1/deployments`, `GET/PATCH/DELETE /v1/deployments/:id` | deployments (`domainId` + `subdomain`, which is ignored on an exact domain). Passwords go in as plaintext (`loginPassword`, `basicPassword`, at least 8 characters; `""` clears one) and are stored as bcrypt hashes. `protocol` is `http`, `https` or `ssh`; ssh deployments also have `sshCli`, `sshShell`, `sshUser` and the read-only `sshHostKey` (PATCH `""` forgets it). `rateLimitEnabled`, `rateLimitRequests`, `rateLimitPeriodS` (1 or 60), `rateLimitBurst` set the per-client-IP rate limit (see "Edge auth") |
 | `POST /v1/deployments/:id/tokens {name, expiresInS?}`, `DELETE …/tokens/:tid` | API tokens; `POST` returns the token once. `expiresInS` 0 or missing never expires |
 
 Sessions are tied to a fingerprint of the root password, so changing the

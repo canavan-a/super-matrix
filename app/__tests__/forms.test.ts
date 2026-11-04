@@ -30,6 +30,10 @@ const existing: Deployment = {
   sshShell: true,
   sshUser: '',
   sshHostKey: '',
+  rateLimitEnabled: false,
+  rateLimitRequests: 100,
+  rateLimitPeriodS: 60,
+  rateLimitBurst: 0,
   certStatus: 'ok',
   certExpiresAt: '2027-01-01T00:00:00Z',
   certError: '',
@@ -74,6 +78,10 @@ describe('deployment form', () => {
       sshCli: true,
       sshShell: true,
       sshUser: '',
+      rateLimitEnabled: false,
+      rateLimitRequests: 100,
+      rateLimitPeriodS: 60,
+      rateLimitBurst: 0,
     });
     expect('loginPassword' in input).toBe(false);
     expect('basicPassword' in input).toBe(false);
