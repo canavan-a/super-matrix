@@ -18,6 +18,11 @@ wherever the services run. No open ports at home, no third party in the path.
   which opens the deployment's sign-in in your browser first, like
   `cloudflared access ssh`. Or use the browser shell on its hostname. Same auth,
   same port 443.
+- **Bridges for anything else.** A bridge carries a TCP or UDP port from one
+  relay's network to another's: Postgres on the homelab as `127.0.0.1:5432`
+  on the laptop, a game server, syslog, DNS. Or it opens a port on the server
+  itself, to the internet (a public bridge). Same relay links, nothing new to
+  open between relays.
 - **Any number of domains.** Wildcard ones (`*.example.com`, each deployment
   picks a subdomain) and exact ones (`status.foo.org`), managed in the app.
 - **A certificate per deployment.** Point a wildcard DNS record at the server
@@ -31,7 +36,7 @@ wherever the services run. No open ports at home, no third party in the path.
   sees them.
 - **One root password** manages everything, from the app on Android or the web
   app the server serves.
-- **Your data in SQLite** on the server: relays, deployments, hashed tokens.
+- **Your data in SQLite** on the server: relays, deployments, bridges, hashed tokens.
 
 ## How it works
 
@@ -174,7 +179,78 @@ docker run -d --entrypoint supermatrix-relay \
 Traefik: TLS passes through by SNI (so the server still gets its own
 per-host certificates), port 80 goes through a plain Ingress, and QUIC uses a
 UDP hostPort. Each domain added in the app also needs adding to its
-`HostSNI` match and port-80 rules.
+`HostSNI` match and port-80 rules. Public bridges need their ports added
+too (`SUPERMATRIX_PUBLIC_PORTS` in the env, and a hostPort or Service port for
+each, TCP or UDP as the bridge is).
+
+## Bridges
+
+A **bridge** is a TCP or UDP port on one relay's machine that leads to a
+service on another relay's network. In the app: **+ New → Bridge**.
+
+```
+postgres   tcp   laptop 127.0.0.1:5432  →  homelab 127.0.0.1:5432
+syslog     udp   vps    127.0.0.1:514   →  homelab 10.0.0.2:514
+```
+
+The relay at the listening end opens the port itself; there's nothing else to
+install. Each TCP connection gets its own stream, so connection pools work as
+usual. UDP packets go through as they are, and each sender gets its own
+socket at the far end so replies reach the right app. A sender that's quiet
+for longer than the bridge's idle timeout (5 minutes by default) is forgotten,
+and gets a new source port when it speaks again.
+
+Neither relay reads the traffic. The service checks its own authentication
+(Postgres' password, TURN's credentials), and sees the far relay as its
+client. Several relays can reach the same service: give each its own bridge.
+
+Bridged UDP rides a stream, so it arrives in order and isn't dropped: on a
+lossy link, real-time traffic sees delay instead of loss. A bridge is one port
+to one port. Protocols that open more ports mid-conversation (SIP media, FTP,
+TFTP) or rely on broadcast (mDNS, DHCP) don't work through one; it's not a
+VPN.
+
+Relays say which bridges they support when they connect. One that's too old
+is greyed out in the app until it's updated.
+
+### Public bridges
+
+A bridge can also listen on the server itself, open to the internet. Allow
+some ports for them first:
+
+```nix
+services.supermatrix.publicBridges.ports = [ 3478 ];
+services.supermatrix.publicBridges.portRanges = [ { from = 20000; to = 20100; } ];
+```
+
+Elsewhere, set `SUPERMATRIX_PUBLIC_PORTS=3478,20000-20100` and open those
+ports in the firewall (the NixOS module does that with `openFirewall`). The
+server's own ports are refused.
+
+A public bridge can have a DNS name on one of your domains, like
+`turn.example.com` on `*.example.com`; the app shows that as its address and
+can check that it points at the server. It's only a name: raw TCP and UDP
+carry no hostname, so the port decides which bridge a connection reaches, and
+several bridges (or a deployment) can share a name on different ports. Raw TCP and UDP have no sign-in, so the
+service's own authentication is the only lock. Each public bridge can have an
+IP allow list, and one address can hold at most 32 connections (TCP) or 64
+senders (UDP) on it.
+
+**A TURN server behind a relay** works as a public bridge when every client
+uses relay-only ICE (`iceTransportPolicy: "relay"`) with it. Only 3478 has to
+be public, because media passes between the TURN server's own allocations on
+its machine:
+
+- Give coturn its own address as the relay address (`relay-ip=<its private
+  IP>`, `allowed-peer-ip=<the same>`, no `external-ip`).
+- Run it in its own container or network namespace: TURN users can send to
+  that address, so nothing else should listen there.
+- Bridge 3478/udp, and 3478/tcp for clients without UDP. Give the UDP bridge a
+  long idle timeout (15 minutes or more), longer than clients' allocation
+  refresh.
+
+Peers that aren't relay-only, or that use another TURN server, can't reach it
+this way. For them, run coturn on the server itself.
 
 ## SSH deployments
 

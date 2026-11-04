@@ -44,10 +44,23 @@ type Relay struct {
 	UpgradeEvery time.Duration
 	// HealthEvery is how often targets are probed (default 30s).
 	HealthEvery time.Duration
-	Logf        func(format string, args ...any)
+	// Features overrides what the relay says it supports (nil: everything
+	// this build can do; tests use it to act like an older relay).
+	Features []string
+	Logf     func(format string, args ...any)
 
 	mu      sync.Mutex
 	targets map[string]Target
+
+	// cur is the session bridge listeners open their streams on (nil while
+	// disconnected).
+	curMu sync.Mutex
+	cur   link
+
+	lmu          sync.Mutex
+	listeners    map[string]*activeListener
+	wantListen   []Listener
+	listenHealth map[string]string
 
 	stateMu   sync.Mutex
 	transport string
@@ -104,6 +117,9 @@ func (r *Relay) Run(ctx context.Context) error {
 	if r.UpgradeEvery == 0 {
 		r.UpgradeEvery = 5 * time.Minute
 	}
+	// Bridge listeners outlive reconnects (the server sends the same set
+	// again), but not the relay.
+	defer r.setListeners(nil)
 	backoff := time.Second
 	var next *conn
 	for {
@@ -334,7 +350,7 @@ func (r *Relay) serve(ctx context.Context, c *conn) (*conn, error) {
 		return writeLine(c.ctrl, m)
 	}
 	hello := func(fallback string) error {
-		return send(Control{Type: "hello", Hello: &Hello{Version: r.Version, Hostname: host, Fallback: fallback}})
+		return send(Control{Type: "hello", Hello: &Hello{Version: r.Version, Hostname: host, Fallback: fallback, Features: r.features()}})
 	}
 	if err := hello(c.fallback); err != nil {
 		c.link.Close()
@@ -342,6 +358,8 @@ func (r *Relay) serve(ctx context.Context, c *conn) (*conn, error) {
 	}
 	tr := c.link.Transport()
 	r.setStatus(tr, c.fallback)
+	r.setLink(c.link)
+	defer r.unsetLink(c.link)
 	if tr == TransportQUIC {
 		r.Logf("relay: connected to %s over QUIC", r.ServerURL)
 	} else {
@@ -369,12 +387,17 @@ func (r *Relay) serve(ctx context.Context, c *conn) (*conn, error) {
 				c.link.Close()
 				return
 			}
-			if m.Type == "targets" {
+			switch m.Type {
+			case "targets":
 				r.setTargets(m.Targets)
-				select {
-				case kick <- struct{}{}:
-				default:
-				}
+			case "listeners":
+				r.setListeners(m.Listeners)
+			default:
+				continue
+			}
+			select {
+			case kick <- struct{}{}:
+			default:
 			}
 		}
 	}()
@@ -487,6 +510,16 @@ func (r *Relay) handle(st net.Conn) {
 		st.Close()
 		return
 	}
+	if t.Protocol == "udp" {
+		// No connection to make: each flow on the stream gets a socket.
+		if err := writeLine(st, StreamReply{}); err != nil {
+			st.Close()
+			return
+		}
+		_ = st.SetDeadline(time.Time{})
+		serveUDPTarget(st, t)
+		return
+	}
 	conn, err := dialTarget(t, 10*time.Second)
 	if err != nil {
 		_ = writeLine(st, StreamReply{Error: err.Error()})
@@ -499,6 +532,11 @@ func (r *Relay) handle(st net.Conn) {
 		return
 	}
 	_ = st.SetDeadline(time.Time{})
+	if t.Protocol == "tcp" {
+		// A bridge: let either end half-close, as TCP allows.
+		pipeHalf(st, conn)
+		return
+	}
 	Pipe(st, conn)
 }
 
@@ -563,7 +601,9 @@ func (r *Relay) healthLoop(done <-chan struct{}, kick <-chan struct{}, send func
 			go func(t Target) {
 				defer wg.Done()
 				status := "ok"
-				if c, err := dialTarget(t, 5*time.Second); err != nil {
+				if t.Protocol == "udp" {
+					// UDP has nothing to connect to; a probe would prove nothing.
+				} else if c, err := dialTarget(t, 5*time.Second); err != nil {
 					status = err.Error()
 				} else {
 					c.Close()
@@ -574,6 +614,10 @@ func (r *Relay) healthLoop(done <-chan struct{}, kick <-chan struct{}, send func
 			}(t)
 		}
 		wg.Wait()
+		r.retryListeners()
+		for id, s := range r.listenerHealth() {
+			health[id] = s
+		}
 		if err := send(Control{Type: "health", Health: health}); err != nil {
 			return
 		}

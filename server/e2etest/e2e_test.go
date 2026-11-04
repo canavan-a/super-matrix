@@ -21,6 +21,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"main/api"
+	"main/bridgepub"
 	"main/config"
 	"main/database"
 	"main/edge"
@@ -42,12 +43,18 @@ type env struct {
 	dir           string
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T) *env { t.Helper(); return newEnvWith(t, nil) }
+
+// newEnvWith is newEnv with opt adjusting the server's config first.
+func newEnvWith(t *testing.T, opt func(*config.Config)) *env {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Config{
 		AdminHost: "127.0.0.1", BaseDomain: "test", TLS: "off", DataDir: dir,
 		DBPath: dir + "/sm.db", RootPassword: rootPW,
+	}
+	if opt != nil {
+		opt(&cfg)
 	}
 	db, err := database.Connect(cfg.DBPath)
 	if err != nil {
@@ -69,6 +76,14 @@ func newEnv(t *testing.T) *env {
 	e := edge.New(cfg, reg, hub, key, a.Handler())
 	e.TokenUsed = a.TokenUsed
 	a.AfterChange = e.Changed
+	if len(cfg.PublicPorts) > 0 {
+		pm := bridgepub.New(reg, hub, "127.0.0.1")
+		pm.OnChange = a.StatusChanged
+		a.Public = pm
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		go pm.Run(ctx)
+	}
 	srv := httptest.NewServer(e)
 	t.Cleanup(srv.Close)
 

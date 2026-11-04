@@ -47,7 +47,7 @@ func ListenQUIC(addr string, tlsConf *tls.Config) (*QUICListener, error) {
 	t := tlsConf.Clone()
 	t.NextProtos = []string{ALPN}
 	t.MinVersion = tls.VersionTLS13
-	ln, err := quic.ListenAddr(addr, t, quicConfig(4))
+	ln, err := quic.ListenAddr(addr, t, quicConfig(1<<16))
 	if err != nil {
 		return nil, err
 	}

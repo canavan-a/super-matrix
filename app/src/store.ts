@@ -4,7 +4,20 @@
 // Screens read it through useStore(); every change calls emit().
 import {useEffect, useReducer, useRef} from 'react';
 
-import {api, ApiError, Deployment, DeploymentInput, Domain, DomainDns, Relay, RelayState, ServerInfo} from './api';
+import {
+  api,
+  ApiError,
+  Bridge,
+  BridgeInput,
+  BridgeProtocol,
+  Deployment,
+  DeploymentInput,
+  Domain,
+  DomainDns,
+  Relay,
+  RelayState,
+  ServerInfo,
+} from './api';
 import {loadSessions, saveSessions} from './keystore';
 import {normalizeServer, settingsStore} from './settings';
 
@@ -17,9 +30,12 @@ interface State {
   info: ServerInfo | null;
   relays: Relay[];
   deployments: Deployment[];
+  bridges: Bridge[];
   domains: Domain[];
   /** relay id → live state; a relay missing here is offline */
   live: Record<string, RelayState>;
+  /** public bridge id → "ok" or why the server can't listen on its port */
+  publicLive: Record<string, string>;
   /** the lists have been fetched at least once for this server */
   loaded: boolean;
   /** the live WebSocket is up */
@@ -39,8 +55,10 @@ const initial: State = {
   info: null,
   relays: [],
   deployments: [],
+  bridges: [],
   domains: [],
   live: {},
+  publicLive: {},
   loaded: false,
   connected: false,
   error: null,
@@ -192,10 +210,28 @@ let refreshing: Promise<void> | null = null;
 export function refresh(): Promise<void> {
   refreshing ??= (async () => {
     try {
-      const [info, relays, deployments, domains, live] = await authed((s, t) =>
-        Promise.all([api.info(s, t), api.relays(s, t), api.deployments(s, t), api.domains(s, t), api.status(s, t)]),
+      const [info, relays, deployments, bridges, domains, status] = await authed((s, t) =>
+        Promise.all([
+          api.info(s, t),
+          api.relays(s, t),
+          api.deployments(s, t),
+          api.bridges(s, t),
+          api.domains(s, t),
+          api.status(s, t),
+        ]),
       );
-      if (state.phase === 'ready') set({info, relays, deployments, domains, live, loaded: true, error: null});
+      if (state.phase === 'ready')
+        set({
+          info,
+          relays,
+          deployments,
+          bridges,
+          domains,
+          live: status.relays ?? {},
+          publicLive: status.public ?? {},
+          loaded: true,
+          error: null,
+        });
     } catch (e) {
       if (state.phase === 'ready') set({error: (e as Error).message, loaded: true});
       throw e;
@@ -258,6 +294,17 @@ export async function deleteToken(id: string, tid: string): Promise<void> {
   await refresh().catch(() => {});
 }
 
+export async function saveBridge(id: string | null, input: BridgeInput): Promise<Bridge> {
+  const b = await authed((s, t) => (id ? api.updateBridge(s, t, id, input) : api.createBridge(s, t, input)));
+  await refresh().catch(() => {});
+  return b;
+}
+
+export async function deleteBridge(id: string): Promise<void> {
+  await authed((s, t) => api.deleteBridge(s, t, id));
+  await refresh().catch(() => {});
+}
+
 export async function createDomain(name: string): Promise<Domain> {
   const d = await authed((s, t) => api.createDomain(s, t, name));
   await refresh().catch(() => {});
@@ -271,6 +318,10 @@ export async function deleteDomain(id: string): Promise<void> {
 
 export function checkDomainDns(id: string): Promise<DomainDns> {
   return authed((s, t) => api.domainDns(s, t, id));
+}
+
+export function checkBridgeDns(id: string): Promise<DomainDns> {
+  return authed((s, t) => api.bridgeDns(s, t, id));
 }
 
 // ---- live status ----
@@ -298,7 +349,7 @@ function connect() {
     }
     if (msg.type === 'status') {
       backoff = 1000;
-      set({live: msg.relays ?? {}, connected: true});
+      set({live: msg.relays ?? {}, publicLive: msg.public ?? {}, connected: true});
     } else if (msg.type === 'changed') {
       // Several changes tend to land together; refetch once.
       if (refetchTimer) clearTimeout(refetchTimer);
@@ -357,6 +408,39 @@ export function deploymentHealth(d: Deployment, live: Record<string, RelayState>
   if (h === undefined) return {health: 'unknown', detail: 'Checking…'};
   if (h === 'ok') return {health: 'ok', detail: 'Reachable'};
   return {health: 'unreachable', detail: h};
+}
+
+/** Whether a relay can serve bridges of this protocol (from what it said when it last connected). */
+export function supportsBridges(r: Relay | undefined, protocol: BridgeProtocol): boolean {
+  return !!r?.features?.includes(`bridge-${protocol}`);
+}
+
+/**
+ * A bridge works when its listening side is up (the relay, or the server for
+ * a public one) and the relay at the far end is online and can serve it.
+ */
+export function bridgeHealth(
+  b: Bridge,
+  relays: Relay[],
+  live: Record<string, RelayState>,
+  publicLive: Record<string, string>,
+): {health: Health; detail: string} {
+  if (!b.enabled) return {health: 'disabled', detail: 'Turned off'};
+  const ends = b.public ? [b.toRelayId] : [b.fromRelayId, b.toRelayId];
+  for (const id of ends) {
+    const r = relays.find(x => x.id === id);
+    const name = r?.name ?? 'a relay';
+    const l = live[id];
+    if (!l) return {health: 'offline', detail: `${name} is offline`};
+    if (!(l.features ?? r?.features ?? []).includes(`bridge-${b.protocol}`))
+      return {health: 'offline', detail: `${name} needs updating for ${b.protocol.toUpperCase()} bridges`};
+  }
+  const listen = b.public ? publicLive[b.id] ?? (b.listenError || undefined) : live[b.fromRelayId]?.health?.[b.id];
+  const reach = live[b.toRelayId]?.health?.[b.id];
+  if (listen === undefined || reach === undefined) return {health: 'unknown', detail: 'Checking…'};
+  if (listen !== 'ok') return {health: 'unreachable', detail: listen};
+  if (reach !== 'ok') return {health: 'unreachable', detail: reach};
+  return {health: 'ok', detail: b.public ? 'Open to the internet' : 'Listening, target reachable'};
 }
 
 /** Tests can start from a clean slate. */

@@ -140,3 +140,6 @@ func (c *countingConn) Write(p []byte) (int, error) {
 	c.out.Add(uint64(n))
 	return n, err
 }
+
+// CloseWrite ends the sending side only (FIN); reading carries on.
+func (s *quicStream) CloseWrite() error { return s.Stream.Close() }

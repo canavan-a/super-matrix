@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"log"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"main/api"
+	"main/bridgepub"
 	"main/certs"
 	"main/config"
 	"main/database"
@@ -51,6 +53,14 @@ func main() {
 	e.HostKeySeen = a.SSHHostKeySeen
 	e.Mail = mail.New(cfg)
 	a.AfterChange = e.Changed
+	if len(cfg.PublicPorts) > 0 {
+		pm := bridgepub.New(reg, hub, cfg.PublicAddr)
+		pm.OnChange = a.StatusChanged
+		a.Public = pm
+		pm.Reconcile()
+		go pm.Run(context.Background())
+		log.Printf("supermatrix: public bridges may use ports %s", cfg.PublicPorts)
+	}
 	if !cfg.SMTPOn() && cfg.TLSOn() {
 		log.Printf("supermatrix: SMTP isn't configured, so email-code deployments can't send codes")
 	}

@@ -55,6 +55,11 @@ type Config struct {
 	SMTPPort        int
 	SMTPEmail       string
 	SMTPAppPassword string
+	// PublicPorts is where public bridges may listen (SUPERMATRIX_PUBLIC_PORTS,
+	// e.g. "20000-20100,3478"); empty turns public bridges off.
+	PublicPorts PortSet
+	// PublicAddr is the address public bridges bind (default: all).
+	PublicAddr string
 }
 
 func (c Config) TLSOn() bool { return c.TLS != "off" }
@@ -80,6 +85,7 @@ func Load() (Config, error) {
 		QUIC:          os.Getenv("SUPERMATRIX_QUIC") != "off",
 		QUICAddr:      os.Getenv("SUPERMATRIX_QUIC_ADDR"),
 		QUICPublic:    os.Getenv("SUPERMATRIX_QUIC_PUBLIC"),
+		PublicAddr:    os.Getenv("SUPERMATRIX_PUBLIC_ADDR"),
 
 		SMTPHost:        getEnv("SUPERMATRIX_SMTP_HOST", "smtp.gmail.com"),
 		SMTPEmail:       os.Getenv("SUPERMATRIX_SMTP_EMAIL"),
@@ -90,6 +96,9 @@ func Load() (Config, error) {
 		return c, errors.New("SUPERMATRIX_SMTP_PORT must be a port number")
 	}
 	c.SMTPPort = port
+	if c.PublicPorts, err = ParsePortSet(os.Getenv("SUPERMATRIX_PUBLIC_PORTS")); err != nil {
+		return c, fmt.Errorf("SUPERMATRIX_PUBLIC_PORTS: %w", err)
+	}
 	if c.QUICAddr == "" {
 		c.QUICAddr = c.HTTPSAddr
 		if !c.TLSOn() {
@@ -138,4 +147,69 @@ func (c Config) QUICEndpoint() string {
 		port = "443"
 	}
 	return net.JoinHostPort(c.AdminHost, port)
+}
+
+// PortSet is a list of port ranges, e.g. "20000-20100,3478".
+type PortSet []PortRange
+
+type PortRange struct{ Lo, Hi int }
+
+// ParsePortSet parses comma-separated ports and lo-hi ranges.
+func ParsePortSet(s string) (PortSet, error) {
+	var out PortSet
+	for _, f := range strings.Split(s, ",") {
+		if f = strings.TrimSpace(f); f == "" {
+			continue
+		}
+		lo, hi, isRange := strings.Cut(f, "-")
+		a, err := strconv.Atoi(strings.TrimSpace(lo))
+		b := a
+		if err == nil && isRange {
+			b, err = strconv.Atoi(strings.TrimSpace(hi))
+		}
+		if err != nil || a < 1 || b > 65535 || a > b {
+			return nil, fmt.Errorf("bad port or range %q", f)
+		}
+		out = append(out, PortRange{a, b})
+	}
+	return out, nil
+}
+
+// Contains reports whether p is in the set.
+func (s PortSet) Contains(p int) bool {
+	for _, r := range s {
+		if p >= r.Lo && p <= r.Hi {
+			return true
+		}
+	}
+	return false
+}
+
+func (s PortSet) String() string {
+	parts := make([]string, 0, len(s))
+	for _, r := range s {
+		if r.Lo == r.Hi {
+			parts = append(parts, strconv.Itoa(r.Lo))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d-%d", r.Lo, r.Hi))
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
+// Reserved reports whether the server itself uses port (tcp or udp), so
+// a public bridge can't have it.
+func (c Config) Reserved(protocol string, port int) bool {
+	portOf := func(addr string) int {
+		_, p, err := net.SplitHostPort(addr)
+		if err != nil {
+			return -1
+		}
+		n, _ := strconv.Atoi(p)
+		return n
+	}
+	if protocol == "tcp" {
+		return port == portOf(c.HTTPAddr) || (c.TLSOn() && port == portOf(c.HTTPSAddr))
+	}
+	return c.QUIC && port == portOf(c.QUICAddr)
 }

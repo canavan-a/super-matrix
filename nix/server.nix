@@ -28,9 +28,14 @@ let
   # The server's own default: the HTTPS port, or the HTTP one with TLS off.
   quicAddr = if cfg.quic.addr != null then cfg.quic.addr
     else if cfg.tls == "acme" then cfg.httpsAddr else cfg.httpAddr;
+  pb = cfg.publicBridges;
+  publicPortsEnv = lib.concatStringsSep ","
+    (map toString pb.ports ++ map (r: "${toString r.from}-${toString r.to}") pb.portRanges);
   bindsLowPorts = lib.any (a: portOf a < 1024)
     ([ cfg.httpAddr ] ++ lib.optional (cfg.tls == "acme") cfg.httpsAddr
-      ++ lib.optional cfg.quic.enable quicAddr);
+      ++ lib.optional cfg.quic.enable quicAddr)
+    || lib.any (p: p < 1024) pb.ports
+    || lib.any (r: r.from < 1024) pb.portRanges;
 in
 {
   options.services.supermatrix = {
@@ -135,7 +140,7 @@ in
     openFirewall = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "Open the HTTP and HTTPS ports (TCP), and the QUIC port (UDP).";
+      description = "Open the HTTP and HTTPS ports (TCP), the QUIC port (UDP), and the public bridge ports (both).";
     };
 
     quic = {
@@ -159,6 +164,34 @@ in
         default = null;
         example = "matrix.example.com:8443";
         description = "host:port relays are told to dial, when a NAT or firewall maps another port. Default: adminHost and the listener's port.";
+      };
+    };
+
+    publicBridges = {
+      ports = lib.mkOption {
+        type = lib.types.listOf lib.types.port;
+        default = [ ];
+        example = [ 3478 5349 ];
+        description = ''
+          Ports public bridges may listen on (TCP or UDP, as each bridge
+          says). Public bridges are off while this and portRanges are empty.
+          Opened in the firewall with openFirewall.
+        '';
+      };
+      portRanges = lib.mkOption {
+        type = lib.types.listOf (lib.types.submodule {
+          options.from = lib.mkOption { type = lib.types.port; };
+          options.to = lib.mkOption { type = lib.types.port; };
+        });
+        default = [ ];
+        example = [ { from = 20000; to = 20100; } ];
+        description = "Port ranges public bridges may listen on, like ports.";
+      };
+      addr = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "203.0.113.10";
+        description = "Address public bridges bind. Default: all addresses.";
       };
     };
 
@@ -187,9 +220,12 @@ in
     ];
 
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall (
-      map portOf ([ cfg.httpAddr ] ++ lib.optional (cfg.tls == "acme") cfg.httpsAddr)
+      map portOf ([ cfg.httpAddr ] ++ lib.optional (cfg.tls == "acme") cfg.httpsAddr) ++ pb.ports
     );
-    networking.firewall.allowedUDPPorts = lib.mkIf (cfg.openFirewall && cfg.quic.enable) [ (portOf quicAddr) ];
+    networking.firewall.allowedUDPPorts = lib.mkIf cfg.openFirewall
+      (lib.optional cfg.quic.enable (portOf quicAddr) ++ pb.ports);
+    networking.firewall.allowedTCPPortRanges = lib.mkIf cfg.openFirewall pb.portRanges;
+    networking.firewall.allowedUDPPortRanges = lib.mkIf cfg.openFirewall pb.portRanges;
 
     # quic-go wants larger UDP socket buffers than the kernel default for
     # high-bandwidth links (https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes).
@@ -272,6 +308,10 @@ in
         SUPERMATRIX_QUIC_ADDR = quicAddr;
       } // lib.optionalAttrs (cfg.baseDomain != null) {
         SUPERMATRIX_BASE_DOMAIN = cfg.baseDomain;
+      } // lib.optionalAttrs (publicPortsEnv != "") {
+        SUPERMATRIX_PUBLIC_PORTS = publicPortsEnv;
+      } // lib.optionalAttrs (pb.addr != null) {
+        SUPERMATRIX_PUBLIC_ADDR = pb.addr;
       } // lib.optionalAttrs (cfg.quic.publicAddr != null) {
         SUPERMATRIX_QUIC_PUBLIC = cfg.quic.publicAddr;
       } // lib.optionalAttrs cfg.acmeStaging {

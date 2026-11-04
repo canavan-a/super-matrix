@@ -27,16 +27,27 @@ type relayDTO struct {
 	Deployments int64      `json:"deployments"`
 	// ManageDeployments: the relay can manage its own deployments.
 	ManageDeployments bool `json:"manageDeployments"`
+	// Features is what the relay said it supports when it last connected.
+	Features []string `json:"features"`
+	// Bridges counts the bridges that listen on or lead to this relay.
+	Bridges int64 `json:"bridges"`
 }
 
 func (a *API) relayOut(r database.Relay, online map[string]tunnel.RelayState) relayDTO {
 	var n int64
 	a.db.Model(&database.Deployment{}).Where("relay_id = ?", r.ID).Count(&n)
+	var nb int64
+	a.db.Model(&database.Bridge{}).Where("from_relay_id = ? OR to_relay_id = ?", r.ID, r.ID).Count(&nb)
+	feats := []string{}
+	if r.Features != "" {
+		feats = strings.Split(r.Features, ",")
+	}
 	_, on := online[r.ID]
 	return relayDTO{
 		ID: r.ID, Name: r.Name, CreatedAt: r.CreatedAt, LastSeenAt: r.LastSeenAt, LastIP: r.LastIP,
 		Version: r.Version, Hostname: r.Hostname, Online: on, Deployments: n,
 		Transport: r.Transport, Fallback: r.Fallback, ManageDeployments: r.ManageDeployments,
+		Features: feats, Bridges: nb,
 	}
 }
 
@@ -142,6 +153,11 @@ func (a *API) deleteRelay(c *gin.Context) {
 		abort(c, http.StatusConflict, "move or delete this relay's deployments first")
 		return
 	}
+	a.db.Model(&database.Bridge{}).Where("from_relay_id = ? OR to_relay_id = ?", r.ID, r.ID).Count(&n)
+	if n > 0 {
+		abort(c, http.StatusConflict, "delete this relay's bridges first")
+		return
+	}
 	a.db.Delete(r)
 	a.hub.Disconnect(r.ID)
 	a.changed()
@@ -240,7 +256,7 @@ func (a *API) serveRelay(r *database.Relay, ip string, in *tunnel.Incoming) {
 	}
 	seen(map[string]any{"transport": in.Transport()})
 	log.Printf("relay %q connected from %s over %s", r.Name, ip, in.Transport())
-	err := a.hub.Serve(r.ID, ip, in, a.reg.Targets(r.ID))
+	err := a.hub.Serve(r.ID, ip, in, a.reg.Targets(r.ID), a.reg.Listeners(r.ID))
 	log.Printf("relay %q (%s) disconnected: %v", r.Name, in.Transport(), err)
 	seen(map[string]any{})
 	a.watchers.send(gin.H{"type": "changed"})
@@ -249,6 +265,7 @@ func (a *API) serveRelay(r *database.Relay, ip string, in *tunnel.Incoming) {
 func (a *API) onHello(relayID string, h tunnel.Hello, _ string) {
 	a.db.Model(&database.Relay{}).Where("id = ?", relayID).Updates(map[string]any{
 		"version": cleanName(h.Version), "hostname": cleanName(h.Hostname), "fallback": clip(h.Fallback, 300),
+		"features": clip(strings.Join(h.Features, ","), 300),
 	})
 	a.watchers.send(gin.H{"type": "changed"})
 }

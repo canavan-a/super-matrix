@@ -27,6 +27,7 @@ import {navTarget, pendingNav, SETTINGS_NAV} from './notifications/pendingNav';
 import {setThemeColor, startPwa} from './pwa/pwa';
 import {Route} from './routes';
 import {serverLabel} from './settings';
+import {BridgeScreen} from './screens/BridgeScreen';
 import {DeploymentScreen} from './screens/DeploymentScreen';
 import {HomeScreen} from './screens/HomeScreen';
 import {LoginScreen} from './screens/LoginScreen';
@@ -69,6 +70,7 @@ function SessionGate(): React.JSX.Element {
 const TITLES: Record<Route['name'], string> = {
   home: 'Super Matrix',
   deployment: 'Deployment',
+  bridge: 'Bridge',
   relays: 'Relays',
   domains: 'Domains',
   settings: 'Settings',
@@ -82,6 +84,7 @@ function AppInner(): React.JSX.Element {
   const error = useStore(s => s.error);
   const server = useStore(s => s.server);
   const deployments = useStore(s => s.deployments);
+  const bridges = useStore(s => s.bridges);
   useEffect(() => {
     if (loaded) splashHold.release();
   }, [loaded]);
@@ -160,7 +163,11 @@ function AppInner(): React.JSX.Element {
       ? route.id
         ? deployments.find(d => d.id === route.id)?.host ?? TITLES.deployment
         : 'New deployment'
-      : TITLES[route.name];
+      : route.name === 'bridge'
+        ? route.id
+          ? bridges.find(b => b.id === route.id)?.name ?? TITLES.bridge
+          : 'New bridge'
+        : TITLES[route.name];
 
   return (
     <View style={styles.container}>
@@ -215,6 +222,7 @@ function AppInner(): React.JSX.Element {
       <View style={styles.body}>
         {route.name === 'home' && <HomeScreen onNavigate={navigate} />}
         {route.name === 'deployment' && <DeploymentScreen key={route.id ?? 'new'} id={route.id} onNavigate={navigate} />}
+        {route.name === 'bridge' && <BridgeScreen key={route.id ?? 'new'} id={route.id} onNavigate={navigate} />}
         {route.name === 'relays' && <RelaysScreen />}
         {route.name === 'domains' && <DomainsScreen />}
         {route.name === 'settings' && <SettingsScreen />}

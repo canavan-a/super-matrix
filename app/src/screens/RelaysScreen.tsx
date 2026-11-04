@@ -165,6 +165,10 @@ function RelayRow({
             {hostname ? ` · ${hostname}` : ''}
             {version ? ` · v${version}` : ''} · {r.deployments} deployment
             {r.deployments === 1 ? '' : 's'}
+            {r.bridges > 0 ? ` · ${r.bridges} bridge${r.bridges === 1 ? '' : 's'}` : ''}
+          </Text>
+          <Text style={styles.relayMeta} numberOfLines={1}>
+            {bridgeSupport(r)}
           </Text>
           {badge ? (
             <Text style={[styles.relayMeta, fallback && styles.fallback]} numberOfLines={1}>
@@ -235,7 +239,7 @@ function RelayRow({
               kind="secondary"
               icon="trash"
               onPress={() =>
-                platformConfirm(`Delete ${r.name}?`, 'Its token stops working. Move or delete its deployments first.', 'Delete', () =>
+                platformConfirm(`Delete ${r.name}?`, 'Its token stops working. Move or delete its deployments and bridges first.', 'Delete', () =>
                   deleteRelay(r.id).catch(fail),
                 )
               }
@@ -341,4 +345,13 @@ function makeStyles(theme: Theme) {
     },
     sheetTitle: {fontSize: 17, fontWeight: '700', color: theme.text, flex: 1},
   });
+}
+
+/** Which bridges the relay can serve, from what it said when it last connected. */
+export function bridgeSupport(r: Relay): string {
+  const tcp = r.features?.includes('bridge-tcp');
+  const udp = r.features?.includes('bridge-udp');
+  if (tcp && udp) return 'Bridges: TCP and UDP';
+  if (tcp || udp) return `Bridges: ${tcp ? 'TCP' : 'UDP'} only`;
+  return r.lastSeenAt ? 'No bridges: update this relay' : 'Bridges: once it has connected';
 }
