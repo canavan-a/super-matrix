@@ -38,16 +38,25 @@ type Entry struct {
 
 // RateLimitAllow reports whether ip may make another request to e right
 // now, per its configured per-client-IP rate limit. Always true when rate
-// limiting is off for this deployment.
-func (e *Entry) RateLimitAllow(ip string, now time.Time) bool {
+// limiting is off for this deployment. When it isn't allowed, retryAfter is
+// how long until the limit that rejected it resets.
+func (e *Entry) RateLimitAllow(ip string, now time.Time) (ok bool, retryAfter time.Duration) {
 	if !e.RateLimitEnabled {
-		return true
+		return true, 0
 	}
-	ok := e.rateLimiter == nil || e.rateLimiter.Allow(ip, now)
-	if e.burstLimiter != nil && !e.burstLimiter.Allow(ip, now) {
+	key := guard.LimitKey(ip)
+	ok = true
+	if e.rateLimiter != nil && !e.rateLimiter.Allow(key, now) {
 		ok = false
+		retryAfter = e.rateLimiter.RetryAfter(key, now)
 	}
-	return ok
+	if e.burstLimiter != nil && !e.burstLimiter.Allow(key, now) {
+		ok = false
+		if d := e.burstLimiter.RetryAfter(key, now); d > retryAfter {
+			retryAfter = d
+		}
+	}
+	return ok, retryAfter
 }
 
 // AllowsEmail reports whether a normalized address is on the email list,
