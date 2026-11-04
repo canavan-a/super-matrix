@@ -1,0 +1,43 @@
+name: Migration Conflict Check
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch main
+        run: git fetch origin main
+
+      - name: Check for migration number conflicts
+        run: bash scripts/ci/check-migration-conflicts.sh origin/main
+
+  cross-pr-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch main
+        run: git fetch origin main
+
+      - name: Warn on migration number conflicts with other open PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          bash scripts/ci/check-cross-pr-migration-conflicts.sh
+          "${{ github.repository }}"
+          "${{ github.event.pull_request.number }}"
