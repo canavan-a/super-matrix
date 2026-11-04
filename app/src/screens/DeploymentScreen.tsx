@@ -73,6 +73,10 @@ export interface DeploymentForm {
   sshCli: boolean;
   sshShell: boolean;
   sshUser: string;
+  rateLimitEnabled: boolean;
+  rateLimitRequests: string;
+  rateLimitPeriodS: number;
+  rateLimitBurst: string;
 }
 
 export function formFrom(
@@ -103,6 +107,10 @@ export function formFrom(
     sshCli: d?.sshCli ?? true,
     sshShell: d?.sshShell ?? true,
     sshUser: d?.sshUser ?? '',
+    rateLimitEnabled: d?.rateLimitEnabled ?? false,
+    rateLimitRequests: String(d?.rateLimitRequests ?? 100),
+    rateLimitPeriodS: d?.rateLimitPeriodS ?? 60,
+    rateLimitBurst: String(d?.rateLimitBurst ?? 0),
   };
 }
 
@@ -134,6 +142,10 @@ export function formToInput(f: DeploymentForm): DeploymentInput {
     sshCli: f.sshCli,
     sshShell: f.sshShell,
     sshUser: f.sshUser.trim(),
+    rateLimitEnabled: f.rateLimitEnabled,
+    rateLimitRequests: Number(f.rateLimitRequests) || 0,
+    rateLimitPeriodS: f.rateLimitPeriodS,
+    rateLimitBurst: Number(f.rateLimitBurst) || 0,
   };
   if (f.clearLoginPassword) input.loginPassword = '';
   else if (f.loginPassword) input.loginPassword = f.loginPassword;
@@ -628,6 +640,43 @@ export function DeploymentScreen({
         One address or CIDR range per line, checked before any sign-in. Empty
         lets every address try.
       </Hint>
+
+      <ToggleRow
+        label="Rate limiting"
+        hint="Caps requests from a single client address to this deployment, at the edge."
+        value={form.rateLimitEnabled}
+        onChange={v => set({rateLimitEnabled: v})}
+      />
+      {form.rateLimitEnabled && (
+        <View style={[styles.subRow, styles.spaced]}>
+          <Input
+            style={styles.flex}
+            mono
+            value={form.rateLimitRequests}
+            onChangeText={v => set({rateLimitRequests: v.replace(/[^0-9]/g, '')})}
+            placeholder="100"
+            keyboardType="number-pad"
+            accessibilityLabel="Requests"
+          />
+          <Chips
+            options={[
+              {value: 60, label: 'per minute'},
+              {value: 1, label: 'per second'},
+            ]}
+            value={form.rateLimitPeriodS}
+            onChange={v => set({rateLimitPeriodS: v})}
+          />
+          <Input
+            style={styles.port}
+            mono
+            value={form.rateLimitBurst}
+            onChangeText={v => set({rateLimitBurst: v.replace(/[^0-9]/g, '')})}
+            placeholder="burst"
+            keyboardType="number-pad"
+            accessibilityLabel="Burst"
+          />
+        </View>
+      )}
 
       {error ? (
         <Notice kind="error" title="Not saved">

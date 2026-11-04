@@ -15,6 +15,7 @@ import (
 
 	"main/config"
 	"main/database"
+	"main/guard"
 	"main/tunnel"
 )
 
@@ -29,6 +30,33 @@ type Entry struct {
 	// OTPEmails is the set of addresses that can get a sign-in code;
 	// "*@domain" stands for everyone at that domain.
 	OTPEmails map[string]bool
+	// rateLimiter and burstLimiter are nil unless RateLimitEnabled; a
+	// request must pass both (RateLimitAllow) to proceed.
+	rateLimiter  *guard.Limiter
+	burstLimiter *guard.Limiter
+}
+
+// RateLimitAllow reports whether ip may make another request to e right
+// now, per its configured per-client-IP rate limit. Always true when rate
+// limiting is off for this deployment. When it isn't allowed, retryAfter is
+// how long until the limit that rejected it resets.
+func (e *Entry) RateLimitAllow(ip string, now time.Time) (ok bool, retryAfter time.Duration) {
+	if !e.RateLimitEnabled {
+		return true, 0
+	}
+	key := guard.LimitKey(ip)
+	ok = true
+	if e.rateLimiter != nil && !e.rateLimiter.Allow(key, now) {
+		ok = false
+		retryAfter = e.rateLimiter.RetryAfter(key, now)
+	}
+	if e.burstLimiter != nil && !e.burstLimiter.Allow(key, now) {
+		ok = false
+		if d := e.burstLimiter.RetryAfter(key, now); d > retryAfter {
+			retryAfter = d
+		}
+	}
+	return ok, retryAfter
 }
 
 // AllowsEmail reports whether a normalized address is on the email list,
@@ -88,6 +116,12 @@ func (r *Registry) Reload() error {
 		}
 		e := &Entry{Deployment: d, Host: *d.Host, Tokens: map[string]Token{}, OTPEmails: map[string]bool{}}
 		e.Nets, _ = ParseAllowlist(d.IPAllowlist)
+		if d.RateLimitEnabled {
+			e.rateLimiter = guard.NewLimiter(d.RateLimitRequests, time.Duration(d.RateLimitPeriodS)*time.Second)
+			if d.RateLimitBurst > 0 {
+				e.burstLimiter = guard.NewLimiter(d.RateLimitBurst, time.Second)
+			}
+		}
 		for _, m := range strings.Split(d.OTPEmails, "\n") {
 			if m = strings.TrimSpace(m); m != "" {
 				e.OTPEmails[m] = true

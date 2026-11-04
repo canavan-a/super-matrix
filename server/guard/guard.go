@@ -16,6 +16,9 @@ type Limiter struct {
 	limit  int
 	window time.Duration
 	hits   map[string]*window
+	// swept is when expired keys were last dropped; the sweep is O(n), so it
+	// runs at most once per window.
+	swept time.Time
 }
 
 type window struct {
@@ -30,7 +33,8 @@ func NewLimiter(limit int, per time.Duration) *Limiter {
 func (l *Limiter) Allow(key string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(l.hits) > 10000 {
+	if len(l.hits) > 10000 && now.Sub(l.swept) > l.window {
+		l.swept = now
 		for k, w := range l.hits {
 			if now.Sub(w.start) > l.window {
 				delete(l.hits, k)
@@ -53,6 +57,34 @@ func (l *Limiter) Blocked(key string, now time.Time) bool {
 	defer l.mu.Unlock()
 	w, ok := l.hits[key]
 	return ok && now.Sub(w.start) <= l.window && w.n >= l.limit
+}
+
+// RetryAfter is how long until key's current window ends and it may try
+// again, rounded up to whole seconds (at least one). Zero if key isn't
+// limited by an open window.
+func (l *Limiter) RetryAfter(key string, now time.Time) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	w, ok := l.hits[key]
+	if !ok {
+		return 0
+	}
+	left := l.window - now.Sub(w.start)
+	if left <= 0 {
+		return 0
+	}
+	return (left + time.Second - 1) / time.Second * time.Second
+}
+
+// LimitKey is the key to count a client address under. IPv6 clients are
+// grouped by /64, since one subscriber is typically handed a whole /64 and
+// could otherwise mint endless addresses to dodge a limit or fill the table.
+func LimitKey(ip string) string {
+	p := net.ParseIP(ip)
+	if p == nil || p.To4() != nil {
+		return ip
+	}
+	return p.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }
 
 // ClientIP is the address a request came from.

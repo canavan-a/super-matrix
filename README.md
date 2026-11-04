@@ -29,6 +29,9 @@ wherever the services run. No open ports at home, no third party in the path.
   (`Authorization: Bearer`, optionally expiring) also get past any of the
   sign-ins, for scripts. An IP allow list works with any of them. Credentials are checked and stripped at the server; the service never
   sees them.
+- **A rate limit per deployment**, by client address: a sustained
+  requests-per-second or -minute cap, with an optional short burst
+  allowance on top. Off by default; over it gets a 429.
 - **One root password** manages everything, from the app on Android or the web
   app the server serves.
 - **Your data in SQLite** on the server: relays, deployments, hashed tokens.

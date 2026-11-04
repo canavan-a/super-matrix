@@ -26,37 +26,41 @@ type tokenDTO struct {
 }
 
 type deploymentDTO struct {
-	ID               string     `json:"id"`
-	RelayID          string     `json:"relayId"`
-	DomainID         string     `json:"domainId"`
-	Subdomain        string     `json:"subdomain"`
-	Host             string     `json:"host"`
-	URL              string     `json:"url"`
-	Protocol         string     `json:"protocol"`
-	TargetHost       string     `json:"targetHost"`
-	TargetPort       int        `json:"targetPort"`
-	TLSSkipVerify    bool       `json:"tlsSkipVerify"`
-	SNI              string     `json:"sni"`
-	PreserveHost     bool       `json:"preserveHost"`
-	Enabled          bool       `json:"enabled"`
-	AuthMode         string     `json:"authMode"`
-	HasLoginPassword bool       `json:"hasLoginPassword"`
-	AllowRootLogin   bool       `json:"allowRootLogin"`
-	SessionTTLS      int        `json:"sessionTtlS"`
-	BasicUser        string     `json:"basicUser"`
-	HasBasicPassword bool       `json:"hasBasicPassword"`
-	OTPEmails        []string   `json:"otpEmails"`
-	IPAllowlist      []string   `json:"ipAllowlist"`
-	SSHCLI           bool       `json:"sshCli"`
-	SSHShell         bool       `json:"sshShell"`
-	SSHUser          string     `json:"sshUser"`
-	SSHHostKey       string     `json:"sshHostKey"`
-	CertStatus       string     `json:"certStatus"`
-	CertExpiresAt    *time.Time `json:"certExpiresAt"`
-	CertError        string     `json:"certError"`
-	Tokens           []tokenDTO `json:"tokens"`
-	CreatedAt        time.Time  `json:"createdAt"`
-	UpdatedAt        time.Time  `json:"updatedAt"`
+	ID                string     `json:"id"`
+	RelayID           string     `json:"relayId"`
+	DomainID          string     `json:"domainId"`
+	Subdomain         string     `json:"subdomain"`
+	Host              string     `json:"host"`
+	URL               string     `json:"url"`
+	Protocol          string     `json:"protocol"`
+	TargetHost        string     `json:"targetHost"`
+	TargetPort        int        `json:"targetPort"`
+	TLSSkipVerify     bool       `json:"tlsSkipVerify"`
+	SNI               string     `json:"sni"`
+	PreserveHost      bool       `json:"preserveHost"`
+	Enabled           bool       `json:"enabled"`
+	AuthMode          string     `json:"authMode"`
+	HasLoginPassword  bool       `json:"hasLoginPassword"`
+	AllowRootLogin    bool       `json:"allowRootLogin"`
+	SessionTTLS       int        `json:"sessionTtlS"`
+	BasicUser         string     `json:"basicUser"`
+	HasBasicPassword  bool       `json:"hasBasicPassword"`
+	OTPEmails         []string   `json:"otpEmails"`
+	IPAllowlist       []string   `json:"ipAllowlist"`
+	SSHCLI            bool       `json:"sshCli"`
+	SSHShell          bool       `json:"sshShell"`
+	SSHUser           string     `json:"sshUser"`
+	SSHHostKey        string     `json:"sshHostKey"`
+	RateLimitEnabled  bool       `json:"rateLimitEnabled"`
+	RateLimitRequests int        `json:"rateLimitRequests"`
+	RateLimitPeriodS  int        `json:"rateLimitPeriodS"`
+	RateLimitBurst    int        `json:"rateLimitBurst"`
+	CertStatus        string     `json:"certStatus"`
+	CertExpiresAt     *time.Time `json:"certExpiresAt"`
+	CertError         string     `json:"certError"`
+	Tokens            []tokenDTO `json:"tokens"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	UpdatedAt         time.Time  `json:"updatedAt"`
 }
 
 func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []database.DeploymentToken) deploymentDTO {
@@ -75,6 +79,8 @@ func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []databa
 		SessionTTLS: d.SessionTTLS, BasicUser: d.BasicUser, HasBasicPassword: d.BasicPassHash != "",
 		OTPEmails: splitAllowlist(d.OTPEmails), IPAllowlist: splitAllowlist(d.IPAllowlist), CertStatus: d.CertStatus, CertExpiresAt: d.CertExpiresAt,
 		SSHCLI: d.SSHCLI, SSHShell: d.SSHShell, SSHUser: d.SSHUser, SSHHostKey: d.SSHHostKey,
+		RateLimitEnabled: d.RateLimitEnabled, RateLimitRequests: d.RateLimitRequests,
+		RateLimitPeriodS: d.RateLimitPeriodS, RateLimitBurst: d.RateLimitBurst,
 		CertError: d.CertError, Tokens: []tokenDTO{}, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
 	}
 	for _, t := range toks {
@@ -169,6 +175,13 @@ type deploymentInput struct {
 	SSHUser        *string   `json:"sshUser"`
 	// SSHHostKey can only be cleared (""), so the shell trusts the next key.
 	SSHHostKey *string `json:"sshHostKey"`
+	// RateLimitPeriodS is the sustained window's length in seconds (60 =
+	// "per minute", 1 = "per second"); RateLimitBurst, if > 0, additionally
+	// caps a short 1s window.
+	RateLimitEnabled  *bool `json:"rateLimitEnabled"`
+	RateLimitRequests *int  `json:"rateLimitRequests"`
+	RateLimitPeriodS  *int  `json:"rateLimitPeriodS"`
+	RateLimitBurst    *int  `json:"rateLimitBurst"`
 }
 
 var (
@@ -302,6 +315,18 @@ func (a *API) apply(d *database.Deployment, in deploymentInput) error {
 		}
 		d.OTPEmails = strings.Join(list, "\n")
 	}
+	if in.RateLimitEnabled != nil {
+		d.RateLimitEnabled = *in.RateLimitEnabled
+	}
+	if in.RateLimitRequests != nil {
+		d.RateLimitRequests = *in.RateLimitRequests
+	}
+	if in.RateLimitPeriodS != nil {
+		d.RateLimitPeriodS = *in.RateLimitPeriodS
+	}
+	if in.RateLimitBurst != nil {
+		d.RateLimitBurst = *in.RateLimitBurst
+	}
 	if in.IPAllowlist != nil {
 		joined := strings.Join(*in.IPAllowlist, "\n")
 		nets, err := registry.ParseAllowlist(joined)
@@ -346,6 +371,12 @@ func (a *API) apply(d *database.Deployment, in deploymentInput) error {
 		return inputError("session length must be between 5 minutes and a year")
 	case len(d.SNI) > 253:
 		return inputError("SNI too long")
+	case d.RateLimitEnabled && d.RateLimitRequests < 1:
+		return inputError("rate limit: requests must be at least 1")
+	case d.RateLimitEnabled && d.RateLimitPeriodS != 1 && d.RateLimitPeriodS != 60:
+		return inputError("rate limit: period must be per second or per minute")
+	case d.RateLimitEnabled && d.RateLimitBurst < 0:
+		return inputError("rate limit: burst can't be negative")
 	}
 	switch d.AuthMode {
 	case database.AuthNone, database.AuthToken:
@@ -407,6 +438,7 @@ func (a *API) createDeployment(c *gin.Context) {
 	d := database.Deployment{
 		ID: database.NewID(), Protocol: database.ProtocolHTTP, Enabled: true, AuthMode: database.AuthLogin, SSHCLI: true, SSHShell: true,
 		AllowRootLogin: true, SessionTTLS: 7 * 24 * 3600, CertStatus: database.CertPending,
+		RateLimitRequests: 100, RateLimitPeriodS: 60,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if !a.cfg.TLSOn() {
