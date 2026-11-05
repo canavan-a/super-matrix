@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"main/database"
 )
@@ -92,6 +94,11 @@ func (a *API) createDomain(c *gin.Context) {
 	}
 	d := database.Domain{ID: database.NewID(), Name: name, Wildcard: wildcard, CreatedAt: a.now()}
 	if err := a.db.Create(&d).Error; err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			// Added by a concurrent request since the check above.
+			abort(c, http.StatusConflict, d.Label()+" is already added")
+			return
+		}
 		abort(c, http.StatusInternalServerError, "server error")
 		return
 	}

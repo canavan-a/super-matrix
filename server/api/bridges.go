@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"main/database"
 	"main/registry"
@@ -246,8 +247,10 @@ func (a *API) applyBridge(b *database.Bridge, in bridgeInput, isNew bool) error 
 			return inputError(fmt.Sprintf("%s port %d is the server's own", b.Protocol, b.ListenPort))
 		}
 		var n int64
-		a.db.Model(&database.Bridge{}).Where("from_relay_id IS NULL AND protocol = ? AND listen_port = ? AND id <> ?",
-			b.Protocol, b.ListenPort, b.ID).Count(&n)
+		if err := a.db.Model(&database.Bridge{}).Where("from_relay_id IS NULL AND protocol = ? AND listen_port = ? AND id <> ?",
+			b.Protocol, b.ListenPort, b.ID).Count(&n).Error; err != nil {
+			return err
+		}
 		if n > 0 {
 			return conflictError(fmt.Sprintf("another public bridge already uses %s port %d", b.Protocol, b.ListenPort))
 		}
@@ -272,8 +275,10 @@ func (a *API) applyBridge(b *database.Bridge, in bridgeInput, isNew bool) error 
 		}
 		relays = append(relays, from)
 		var n int64
-		a.db.Model(&database.Bridge{}).Where("from_relay_id = ? AND protocol = ? AND listen_host = ? AND listen_port = ? AND id <> ?",
-			*b.FromRelayID, b.Protocol, b.ListenHost, b.ListenPort, b.ID).Count(&n)
+		if err := a.db.Model(&database.Bridge{}).Where("from_relay_id = ? AND protocol = ? AND listen_host = ? AND listen_port = ? AND id <> ?",
+			*b.FromRelayID, b.Protocol, b.ListenHost, b.ListenPort, b.ID).Count(&n).Error; err != nil {
+			return err
+		}
 		if n > 0 {
 			return conflictError(fmt.Sprintf("another bridge already listens on %s %s:%d on that relay", b.Protocol, b.ListenHost, b.ListenPort))
 		}
@@ -302,6 +307,21 @@ func (a *API) bridgeFail(c *gin.Context, err error) {
 	a.inputFail(c, err)
 }
 
+// bridgeWriteFail answers a failed insert or save. applyBridge already
+// checked the port is free, but a concurrent request can take it between
+// that check and the write; the unique index then catches it.
+func bridgeWriteFail(c *gin.Context, b *database.Bridge, err error) {
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		if b.Public() {
+			abort(c, http.StatusConflict, fmt.Sprintf("another public bridge already uses %s port %d", b.Protocol, b.ListenPort))
+		} else {
+			abort(c, http.StatusConflict, fmt.Sprintf("another bridge already listens on %s %s:%d on that relay", b.Protocol, b.ListenHost, b.ListenPort))
+		}
+		return
+	}
+	abort(c, http.StatusInternalServerError, "server error")
+}
+
 func (a *API) createBridge(c *gin.Context) {
 	var in bridgeInput
 	if err := c.ShouldBindJSON(&in); err != nil {
@@ -326,7 +346,7 @@ func (a *API) createBridge(c *gin.Context) {
 		return
 	}
 	if err := a.db.Create(&b).Error; err != nil {
-		abort(c, http.StatusInternalServerError, "server error")
+		bridgeWriteFail(c, &b, err)
 		return
 	}
 	a.changed()
@@ -350,7 +370,7 @@ func (a *API) updateBridge(c *gin.Context) {
 	b.UpdatedAt = a.now()
 	// Save with a nil FromRelayID writes NULL, which is what public means.
 	if err := a.db.Select("*").Save(b).Error; err != nil {
-		abort(c, http.StatusInternalServerError, "server error")
+		bridgeWriteFail(c, b, err)
 		return
 	}
 	a.changed()
