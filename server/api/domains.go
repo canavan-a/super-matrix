@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"main/database"
 )
@@ -19,15 +21,19 @@ type domainDTO struct {
 	Name     string `json:"name"`
 	Wildcard bool   `json:"wildcard"`
 	// Label is how it's written: "*.example.com" or "status.foo.org".
-	Label       string    `json:"label"`
-	Deployments int64     `json:"deployments"`
-	CreatedAt   time.Time `json:"createdAt"`
+	Label       string `json:"label"`
+	Deployments int64  `json:"deployments"`
+	// Bridges counts the public bridges named on it.
+	Bridges   int64     `json:"bridges"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 func (a *API) domainOut(d database.Domain) domainDTO {
 	var n int64
 	a.db.Model(&database.Deployment{}).Where("domain_id = ?", d.ID).Count(&n)
-	return domainDTO{ID: d.ID, Name: d.Name, Wildcard: d.Wildcard, Label: d.Label(), Deployments: n, CreatedAt: d.CreatedAt}
+	var nb int64
+	a.db.Model(&database.Bridge{}).Where("domain_id = ?", d.ID).Count(&nb)
+	return domainDTO{ID: d.ID, Name: d.Name, Wildcard: d.Wildcard, Label: d.Label(), Deployments: n, Bridges: nb, CreatedAt: d.CreatedAt}
 }
 
 // parseDomain reads "*.example.com" (wildcard) or "status.foo.org" (exact).
@@ -88,6 +94,11 @@ func (a *API) createDomain(c *gin.Context) {
 	}
 	d := database.Domain{ID: database.NewID(), Name: name, Wildcard: wildcard, CreatedAt: a.now()}
 	if err := a.db.Create(&d).Error; err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			// Added by a concurrent request since the check above.
+			abort(c, http.StatusConflict, d.Label()+" is already added")
+			return
+		}
 		abort(c, http.StatusInternalServerError, "server error")
 		return
 	}
@@ -105,8 +116,11 @@ func (a *API) deleteDomain(c *gin.Context) {
 		abort(c, http.StatusNotFound, "no such domain")
 		return
 	}
-	if a.domainOut(*d).Deployments > 0 {
+	if out := a.domainOut(*d); out.Deployments > 0 {
 		abort(c, http.StatusConflict, "move or delete the deployments on "+d.Label()+" first")
+		return
+	} else if out.Bridges > 0 {
+		abort(c, http.StatusConflict, "some public bridges use "+d.Label()+" for their name: change them first")
 		return
 	}
 	a.db.Delete(d)
@@ -133,6 +147,12 @@ func (a *API) domainDNS(c *gin.Context) {
 		_, _ = rand.Read(b)
 		probe = "sm-check-" + hex.EncodeToString(b) + "." + d.Name
 	}
+	c.JSON(http.StatusOK, a.checkDNS(c, probe))
+}
+
+// checkDNS compares what probe resolves to with the admin host's
+// addresses: {ok, probe, addresses, expected, detail}.
+func (a *API) checkDNS(c *gin.Context, probe string) gin.H {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 	want, werr := a.Lookup(ctx, a.cfg.AdminHost)
@@ -151,7 +171,7 @@ func (a *API) domainDNS(c *gin.Context) {
 		res["ok"] = true
 		res["detail"] = probe + " points at this server."
 	}
-	c.JSON(http.StatusOK, res)
+	return res
 }
 
 func nonNilStrings(s []string) []string {

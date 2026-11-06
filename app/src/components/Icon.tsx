@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  Cable,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -45,7 +46,8 @@ export type IconName =
   | 'key'
   | 'logout'
   | 'power-off'
-  | 'mail';
+  | 'mail'
+  | 'bridge';
 
 const ICONS: Record<IconName, LucideIcon> = {
   gear: Settings,
@@ -68,6 +70,7 @@ const ICONS: Record<IconName, LucideIcon> = {
   key: KeyRound,
   logout: LogOut,
   mail: Mail,
+  bridge: Cable,
   'power-off': PowerOff,
 };
 

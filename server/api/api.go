@@ -28,6 +28,12 @@ import (
 // Certs is what the API needs from the cert manager (nil with TLS off).
 type Certs interface{ Warm(host string) }
 
+// PublicBridges is what the API needs from the public bridge listeners.
+type PublicBridges interface {
+	Reconcile()
+	Health() map[string]string
+}
+
 type API struct {
 	db  *gorm.DB
 	cfg config.Config
@@ -39,6 +45,8 @@ type API struct {
 	Certs Certs
 	// AfterChange runs after every deployment/relay change (edge pool reset).
 	AfterChange func()
+	// Public runs public bridges; nil when they're off.
+	Public PublicBridges
 
 	// Lookup resolves a hostname (the domains DNS check); tests replace it.
 	Lookup func(ctx context.Context, host string) ([]string, error)
@@ -69,6 +77,7 @@ func New(db *gorm.DB, cfg config.Config, reg *registry.Registry, hub *tunnel.Hub
 	}
 	hub.OnChange = func(string) { a.broadcastStatus() }
 	hub.OnHello = a.onHello
+	hub.OnBridge = a.onBridge
 	go a.statusTicker()
 	return a
 }
@@ -147,6 +156,13 @@ func (a *API) Router() *gin.Engine {
 	admin.POST("/deployments/:id/tokens", a.createToken)
 	admin.DELETE("/deployments/:id/tokens/:tid", a.deleteToken)
 
+	admin.GET("/bridges", a.listBridges)
+	admin.POST("/bridges", a.createBridge)
+	admin.GET("/bridges/:id", a.getBridge)
+	admin.PATCH("/bridges/:id", a.updateBridge)
+	admin.DELETE("/bridges/:id", a.deleteBridge)
+	admin.GET("/bridges/:id/dns", a.bridgeDNS)
+
 	return r
 }
 
@@ -177,6 +193,8 @@ func (a *API) info(c *gin.Context) {
 		"quic":      a.quic.Load(),
 		// smtp: email-code sign-in can send codes.
 		"smtp": a.cfg.SMTPOn(),
+		// publicPorts: where public bridges may listen ("" when they're off).
+		"publicPorts": a.cfg.PublicPorts.String(),
 	})
 }
 
@@ -187,7 +205,10 @@ func (a *API) changed() {
 		return
 	}
 	for _, id := range a.hub.Online() {
-		a.hub.Push(id, a.reg.Targets(id))
+		a.hub.Push(id, a.reg.Targets(id), a.reg.Listeners(id))
+	}
+	if a.Public != nil {
+		a.Public.Reconcile()
 	}
 	if a.Certs != nil {
 		var pending []string

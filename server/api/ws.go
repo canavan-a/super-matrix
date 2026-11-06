@@ -55,7 +55,12 @@ func (ws *watchers) send(v any) {
 }
 
 func (a *API) statusMsg() gin.H {
-	return gin.H{"type": "status", "relays": a.hub.State()}
+	m := gin.H{"type": "status", "relays": a.hub.State()}
+	if a.Public != nil {
+		// public: each public bridge's listen status on the server.
+		m["public"] = a.Public.Health()
+	}
+	return m
 }
 
 func (a *API) broadcastStatus() { a.watchers.send(a.statusMsg()) }
@@ -138,4 +143,11 @@ func (a *API) statusTicker() {
 			a.broadcastStatus()
 		}
 	}
+}
+
+// StatusChanged tells the app something in the live status changed (e.g.
+// a public bridge's port was bound or lost).
+func (a *API) StatusChanged() {
+	a.broadcastStatus()
+	a.watchers.send(gin.H{"type": "changed"})
 }

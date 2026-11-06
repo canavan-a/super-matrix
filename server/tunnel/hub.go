@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,6 +28,10 @@ type Hub struct {
 	OnChange func(relayID string)
 	// OnHello is called when a relay identifies itself.
 	OnHello func(relayID string, h Hello, remote string)
+	// OnBridge decides whether relay fromRelay may open a stream for a
+	// bridge, and if so where it leads: the relay that reaches its target
+	// and its protocol. Without it, relays can't open streams.
+	OnBridge func(fromRelay, bridgeID string) (toRelay, protocol string, err error)
 }
 
 type session struct {
@@ -45,6 +50,12 @@ type session struct {
 	stateMu sync.Mutex
 	hello   Hello
 	health  map[string]string
+	// targets and listeners are the full sets last pushed; the relay is
+	// sent the part its features allow (see filtered).
+	targets   []Target
+	listeners []Listener
+	// pushMu keeps pushes in order, so an older set never lands last.
+	pushMu sync.Mutex
 }
 
 // RelayState is a connected relay's live state.
@@ -67,6 +78,8 @@ type RelayState struct {
 	PacketsLost   uint64  `json:"packetsLost"`
 	// Streams is how many proxied connections are open right now.
 	Streams int64 `json:"streams"`
+	// Features is what the relay said it supports (e.g. "bridge-tcp").
+	Features []string `json:"features"`
 }
 
 func NewHub() *Hub { return &Hub{sessions: map[string]*session{}} }
@@ -99,19 +112,21 @@ func (in *Incoming) Reject(msg string) {
 	in.link.Close()
 }
 
-// Serve runs a relay's session until it ends, first pushing it targets. A
-// relay that connects again replaces its old session, which drains: it
-// keeps the connections it has, but gets no new ones.
-func (h *Hub) Serve(relayID, remote string, in *Incoming, targets []Target) error {
+// Serve runs a relay's session until it ends, first pushing it targets
+// and bridge listeners. A relay that connects again replaces its old
+// session, which drains: it keeps the connections it has, but gets no new
+// ones.
+func (h *Hub) Serve(relayID, remote string, in *Incoming, targets []Target, listeners []Listener) error {
 	defer in.link.Close()
 	s := &session{relayID: relayID, remote: remote, connectedAt: time.Now(), link: in.link, ctrl: in.ctrl,
-		gen: h.gen.Add(1), health: map[string]string{}}
+		gen: h.gen.Add(1), health: map[string]string{}, targets: targets, listeners: listeners}
 	if in.quic {
 		if err := s.send(AuthReply{}); err != nil {
 			return err
 		}
 	}
-	if err := s.send(Control{Type: "targets", Targets: nonNil(targets)}); err != nil {
+	// Until the relay's hello says what it supports, it gets no bridges.
+	if err := s.push(); err != nil {
 		return err
 	}
 
@@ -133,6 +148,18 @@ func (h *Hub) Serve(relayID, remote string, in *Incoming, targets []Target) erro
 		h.changed(relayID)
 	}()
 
+	// Streams the relay opens are for its bridge listeners. A draining
+	// session keeps taking them until it closes.
+	go func() {
+		for {
+			st, err := s.link.Accept(context.Background())
+			if err != nil {
+				return
+			}
+			go h.bridge(s, st)
+		}
+	}()
+
 	lr := newLineReader(in.ctrl)
 	for {
 		var m Control
@@ -146,8 +173,15 @@ func (h *Hub) Serve(relayID, remote string, in *Incoming, targets []Target) erro
 		case "hello":
 			if m.Hello != nil {
 				s.stateMu.Lock()
+				before := s.hello.Features
 				s.hello = *m.Hello
 				s.stateMu.Unlock()
+				if !slices.Equal(before, m.Hello.Features) {
+					// It can do more (or less) than assumed: resend.
+					if err := s.push(); err != nil {
+						return err
+					}
+				}
 				if h.OnHello != nil {
 					go h.OnHello(relayID, *m.Hello, remote)
 				}
@@ -160,6 +194,93 @@ func (h *Hub) Serve(relayID, remote string, in *Incoming, targets []Target) erro
 			h.changed(relayID)
 		}
 	}
+}
+
+// bridge serves a stream a relay opened for one of its bridge listeners:
+// if the relay may use that bridge, it's joined to a stream to the relay
+// at the far end.
+func (h *Hub) bridge(s *session, st net.Conn) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_ = st.SetDeadline(time.Now().Add(20 * time.Second))
+	var hdr StreamHeader
+	if err := readLine(st, &hdr); err != nil {
+		st.Close()
+		return
+	}
+	refuse := func(msg string) {
+		_ = writeLine(st, StreamReply{Error: msg})
+		st.Close()
+	}
+	if hdr.Bridge == "" || h.OnBridge == nil {
+		refuse("relays can only open bridge streams")
+		return
+	}
+	to, proto, err := h.OnBridge(s.relayID, hdr.Bridge)
+	if err != nil {
+		refuse(err.Error())
+		return
+	}
+	if !s.has(BridgeFeature(proto)) {
+		refuse("this relay didn't say it supports " + proto + " bridges")
+		return
+	}
+	up, err := h.Dial(ctx, to, hdr.Bridge)
+	if err != nil {
+		refuse(err.Error())
+		return
+	}
+	if err := writeLine(st, StreamReply{}); err != nil {
+		st.Close()
+		up.Close()
+		return
+	}
+	_ = st.SetDeadline(time.Time{})
+	s.active.Add(1)
+	pipeHalf(&trackedConn{Conn: st, s: s}, up)
+}
+
+// has reports whether the relay's hello listed feature f.
+func (s *session) has(f string) bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.hello.HasFeature(f)
+}
+
+// filtered is the part of the pushed targets and listeners the relay can
+// handle: bridges only for protocols its hello listed.
+func (s *session) filtered() ([]Target, []Listener) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	ts := make([]Target, 0, len(s.targets))
+	for _, t := range s.targets {
+		if (t.Protocol == "tcp" || t.Protocol == "udp") && !s.hello.HasFeature(BridgeFeature(t.Protocol)) {
+			continue
+		}
+		ts = append(ts, t)
+	}
+	var ls []Listener
+	for _, l := range s.listeners {
+		if s.hello.HasFeature(BridgeFeature(l.Protocol)) {
+			ls = append(ls, l)
+		}
+	}
+	return ts, ls
+}
+
+// push sends the relay what it should be serving. Listeners only go to
+// relays that know about bridges.
+func (s *session) push() error {
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	ts, ls := s.filtered()
+	if err := s.send(Control{Type: "targets", Targets: ts}); err != nil {
+		return err
+	}
+	if !s.has(FeatureBridgeTCP) && !s.has(FeatureBridgeUDP) {
+		return nil
+	}
+	return s.send(Control{Type: "listeners", Listeners: nonNilL(ls)})
 }
 
 // drain closes a replaced session once its last proxied connection ends
@@ -200,10 +321,14 @@ func (h *Hub) get(relayID string) *session {
 	return h.sessions[relayID]
 }
 
-// Push sends a relay its current targets, if it's online.
-func (h *Hub) Push(relayID string, targets []Target) {
+// Push sends a relay its current targets and bridge listeners, if it's
+// online.
+func (h *Hub) Push(relayID string, targets []Target, listeners []Listener) {
 	if s := h.get(relayID); s != nil {
-		if err := s.send(Control{Type: "targets", Targets: nonNil(targets)}); err != nil {
+		s.stateMu.Lock()
+		s.targets, s.listeners = targets, listeners
+		s.stateMu.Unlock()
+		if err := s.push(); err != nil {
 			s.link.Close()
 		}
 	}
@@ -257,6 +382,7 @@ func (h *Hub) State() map[string]RelayState {
 			Transport: s.link.Transport(),
 			RTTMs:     float64(st.RTT.Microseconds()) / 1000, BytesSent: st.BytesSent, BytesReceived: st.BytesReceived,
 			PacketsLost: st.PacketsLost, Streams: s.active.Load(),
+			Features: append([]string{}, s.hello.Features...),
 		}
 		if rs.Transport == TransportWebSocket {
 			rs.Fallback = s.hello.Fallback
@@ -267,7 +393,8 @@ func (h *Hub) State() map[string]RelayState {
 	return out
 }
 
-// Dial opens a connection to a deployment's target through its relay.
+// Dial opens a connection to a deployment's (or bridge's) target through
+// its relay.
 func (h *Hub) Dial(ctx context.Context, relayID, deploymentID string) (net.Conn, error) {
 	s := h.get(relayID)
 	if s == nil {
@@ -279,6 +406,16 @@ func (h *Hub) Dial(ctx context.Context, relayID, deploymentID string) (net.Conn,
 	if err != nil {
 		return nil, ErrOffline
 	}
+	if err := exchange(ctx, st, StreamHeader{Deployment: deploymentID}); err != nil {
+		return nil, err
+	}
+	s.active.Add(1)
+	return &trackedConn{Conn: st, s: s}, nil
+}
+
+// exchange writes a stream's header and reads the reply, closing the
+// stream on failure. A refusal from the other end is a *TargetError.
+func exchange(ctx context.Context, st net.Conn, hdr StreamHeader) error {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = st.SetDeadline(dl)
 	} else {
@@ -286,22 +423,21 @@ func (h *Hub) Dial(ctx context.Context, relayID, deploymentID string) (net.Conn,
 	}
 	stop := context.AfterFunc(ctx, func() { st.Close() })
 	defer stop()
-	if err := writeLine(st, StreamHeader{Deployment: deploymentID}); err != nil {
+	if err := writeLine(st, hdr); err != nil {
 		st.Close()
-		return nil, err
+		return err
 	}
 	var reply StreamReply
 	if err := readLine(st, &reply); err != nil {
 		st.Close()
-		return nil, fmt.Errorf("relay: %w", err)
+		return fmt.Errorf("relay: %w", err)
 	}
 	if reply.Error != "" {
 		st.Close()
-		return nil, &TargetError{Msg: reply.Error}
+		return &TargetError{Msg: reply.Error}
 	}
 	_ = st.SetDeadline(time.Time{})
-	s.active.Add(1)
-	return &trackedConn{Conn: st, s: s}, nil
+	return nil
 }
 
 // trackedConn counts a session's open proxied connections.
@@ -327,3 +463,13 @@ func nonNil(t []Target) []Target {
 	}
 	return t
 }
+
+func nonNilL(l []Listener) []Listener {
+	if l == nil {
+		return []Listener{}
+	}
+	return l
+}
+
+// CloseWrite half-closes the stream underneath (see pipeHalf).
+func (c *trackedConn) CloseWrite() error { return closeWrite(c.Conn) }

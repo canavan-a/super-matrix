@@ -38,7 +38,10 @@ func Connect(path string) (*gorm.DB, error) {
 			ParameterizedQueries: true,
 		},
 	)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormLogger})
+	// TranslateError turns a unique-index violation into gorm.ErrDuplicatedKey,
+	// so a request that loses a race past a handler's own check can be told
+	// apart from a real failure.
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormLogger, TranslateError: true})
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/base32"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -27,7 +28,59 @@ type Relay struct {
 	// ManageDeployments lets the relay create, read, update and delete its
 	// own deployments with its token (/v1/relay/*); off by default.
 	ManageDeployments bool
+	// Features is what the relay said it supports in its last hello,
+	// comma-separated (e.g. "bridge-tcp,bridge-udp").
+	Features string
 }
+
+// HasFeature reports whether the relay's last hello listed f.
+func (r Relay) HasFeature(f string) bool {
+	for _, x := range strings.Split(r.Features, ",") {
+		if x == f {
+			return true
+		}
+	}
+	return false
+}
+
+// Bridge protocols.
+const (
+	ProtocolTCP = "tcp"
+	ProtocolUDP = "udp"
+)
+
+// Bridge is a TCP or UDP port that leads to TargetHost:TargetPort on
+// ToRelayID's network. It listens on FromRelayID's machine, or on the
+// server itself (a public bridge) when FromRelayID is nil.
+type Bridge struct {
+	ID          string `gorm:"primaryKey"`
+	Name        string
+	Protocol    string // tcp | udp
+	Enabled     bool
+	FromRelayID *string
+	ListenHost  string
+	ListenPort  int
+	ToRelayID   string
+	TargetHost  string
+	TargetPort  int
+	// UDPIdleS is how long a UDP sender may stay quiet before its flow is
+	// forgotten.
+	UDPIdleS int `gorm:"column:udp_idle_s"`
+	// IPAllowlist is newline-separated CIDRs for public bridges; empty
+	// allows everyone.
+	IPAllowlist string `gorm:"column:ip_allowlist"`
+	// DomainID, Subdomain and Host give a public bridge a DNS name (Host,
+	// "" when it has none): its address is Host:ListenPort. Routing is by
+	// port; the name only has to resolve to the server.
+	DomainID  *string
+	Subdomain string
+	Host      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// Public reports whether the bridge listens on the server.
+func (b Bridge) Public() bool { return b.FromRelayID == nil }
 
 // Auth modes a deployment can sit behind.
 const (

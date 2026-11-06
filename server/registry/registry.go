@@ -80,6 +80,35 @@ type snapshot struct {
 	byHost  map[string]*Entry
 	byID    map[string]*Entry
 	byRelay map[string][]tunnel.Target
+	// listens is the bridge listeners each relay runs.
+	listens map[string][]tunnel.Listener
+	bridges map[string]*BridgeEntry
+}
+
+// BridgeEntry is a bridge as the server needs it.
+type BridgeEntry struct {
+	database.Bridge
+	// Nets is the parsed IP allowlist (public bridges); empty allows everyone.
+	Nets []netip.Prefix
+}
+
+// Allowed reports whether ip may use a public bridge.
+func (b *BridgeEntry) Allowed(ip netip.Addr) bool {
+	if len(b.Nets) == 0 {
+		return true
+	}
+	ip = ip.Unmap()
+	for _, p := range b.Nets {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// Listener is the bridge's near end as a relay (or the server) runs it.
+func (b *BridgeEntry) Listener() tunnel.Listener {
+	return tunnel.Listener{ID: b.ID, Protocol: b.Protocol, Host: b.ListenHost, Port: b.ListenPort, IdleS: b.UDPIdleS}
 }
 
 type Registry struct {
@@ -101,6 +130,10 @@ func (r *Registry) Reload() error {
 	if err := r.db.Find(&deps).Error; err != nil {
 		return err
 	}
+	var bridges []database.Bridge
+	if err := r.db.Find(&bridges).Error; err != nil {
+		return err
+	}
 	var toks []database.DeploymentToken
 	if err := r.db.Select("id", "deployment_id", "token_hash", "expires_at").Find(&toks).Error; err != nil {
 		return err
@@ -109,6 +142,8 @@ func (r *Registry) Reload() error {
 		byHost:  make(map[string]*Entry, len(deps)),
 		byID:    make(map[string]*Entry, len(deps)),
 		byRelay: map[string][]tunnel.Target{},
+		listens: map[string][]tunnel.Listener{},
+		bridges: make(map[string]*BridgeEntry, len(bridges)),
 	}
 	for _, d := range deps {
 		if d.Host == nil {
@@ -145,6 +180,20 @@ func (r *Registry) Reload() error {
 			e.Tokens[t.TokenHash] = tok
 		}
 	}
+	for _, b := range bridges {
+		be := &BridgeEntry{Bridge: b}
+		be.Nets, _ = ParseAllowlist(b.IPAllowlist)
+		s.bridges[b.ID] = be
+		if !b.Enabled {
+			continue
+		}
+		s.byRelay[b.ToRelayID] = append(s.byRelay[b.ToRelayID], tunnel.Target{
+			ID: b.ID, Protocol: b.Protocol, Host: b.TargetHost, Port: b.TargetPort, IdleS: b.UDPIdleS,
+		})
+		if b.FromRelayID != nil {
+			s.listens[*b.FromRelayID] = append(s.listens[*b.FromRelayID], be.Listener())
+		}
+	}
 	r.snap.Store(s)
 	return nil
 }
@@ -156,6 +205,24 @@ func (r *Registry) ByID(id string) *Entry { return r.snap.Load().byID[id] }
 
 // Targets is what a relay should be forwarding.
 func (r *Registry) Targets(relayID string) []tunnel.Target { return r.snap.Load().byRelay[relayID] }
+
+// Listeners is the bridges a relay should listen for.
+func (r *Registry) Listeners(relayID string) []tunnel.Listener { return r.snap.Load().listens[relayID] }
+
+// Bridge finds a bridge by ID, enabled or not.
+func (r *Registry) Bridge(id string) *BridgeEntry { return r.snap.Load().bridges[id] }
+
+// PublicBridges lists the enabled bridges that listen on the server.
+func (r *Registry) PublicBridges() []*BridgeEntry {
+	var out []*BridgeEntry
+	for _, b := range r.snap.Load().bridges {
+		if b.Enabled && b.Public() {
+			out = append(out, b)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
 
 // HostAllowed reports whether host is a deployment's hostname. Disabled
 // ones count: they still answer, with the "disabled" page, over HTTPS.

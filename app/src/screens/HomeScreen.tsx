@@ -1,4 +1,4 @@
-import React, {useRef} from 'react';
+import React, {useRef, useState} from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -8,15 +8,23 @@ import {
   View,
 } from 'react-native';
 
-import {AuthMode, Deployment, Relay, RelayState} from '../api';
+import {AuthMode, Bridge, Deployment, Relay, RelayState} from '../api';
 import {Icon, IconName} from '../components/Icon';
+import {Overlay} from '../components/Overlay';
 import {SpringyPull} from '../components/SpringyPull';
 import {Button, Chips, Dot} from '../components/ui';
 import {isFallback, transportBadge} from '../link';
 import {Route} from '../routes';
 import {settingsStore, useSettings} from '../settings';
-import {deploymentHealth, Health, refresh, useStore} from '../store';
+import {
+  bridgeHealth,
+  deploymentHealth,
+  Health,
+  refresh,
+  useStore,
+} from '../store';
 import {Theme, useTheme} from '../theme';
+import {bridgeLine} from './BridgeScreen';
 
 export const AUTH_LABEL: Record<AuthMode, string> = {
   none: 'Public',
@@ -47,7 +55,7 @@ export function healthColor(theme: Theme, h: Health): string {
   }
 }
 
-/** The deployments on this server: what's exposed where, and whether it's up. */
+/** What's on this server: deployments (public hostnames) and bridges (ports between relays), and whether each is up. */
 export function HomeScreen({
   onNavigate,
 }: {
@@ -57,12 +65,15 @@ export function HomeScreen({
   const styles = makeStyles(theme);
   const loaded = useStore(s => s.loaded);
   const deployments = useStore(s => s.deployments);
+  const bridges = useStore(s => s.bridges);
   const relays = useStore(s => s.relays);
   const live = useStore(s => s.live);
+  const publicLive = useStore(s => s.publicLive);
   const tls = useStore(s => s.info?.tls ?? true);
   const info = useStore(s => s.info);
   const scrollY = useRef(0);
   const groupBy = useSettings().homeGroupBy;
+  const [choosing, setChoosing] = useState(false);
 
   if (!loaded) {
     return (
@@ -86,6 +97,20 @@ export function HomeScreen({
       onPress={() => onNavigate({name: 'deployment', id: d.id})}
     />
   );
+  const bridgeRow = (b: Bridge, role?: 'from' | 'to') => (
+    <BridgeRow
+      key={b.id + (role ?? '')}
+      b={b}
+      role={role}
+      line={bridgeLine(b, relayName)}
+      health={bridgeHealth(b, relays, live, publicLive)}
+      onPress={() => onNavigate({name: 'bridge', id: b.id})}
+    />
+  );
+  const choose = (name: 'deployment' | 'bridge') => {
+    setChoosing(false);
+    onNavigate({name, id: null});
+  };
 
   return (
     <SpringyPull atTop={() => scrollY.current <= 0} onRefresh={refresh}>
@@ -109,19 +134,20 @@ export function HomeScreen({
               style={styles.emptyButton}
             />
           </View>
-        ) : deployments.length === 0 ? (
+        ) : deployments.length === 0 && bridges.length === 0 ? (
           <View style={styles.empty}>
             <Icon name="globe" size={28} color={theme.textMuted} />
             <Text style={styles.emptyTitle}>Nothing exposed yet</Text>
             <Text style={styles.emptyText}>
               A deployment puts a service a relay can reach (like
               http://127.0.0.1:8080) at its own hostname, with its own
-              certificate and sign-in in front.
+              certificate and sign-in in front. A bridge carries a TCP or UDP
+              port (like Postgres on 5432) from one relay's network to another.
             </Text>
             <Button
-              label="New deployment"
+              label="New"
               icon="plus"
-              onPress={() => onNavigate({name: 'deployment', id: null})}
+              onPress={() => setChoosing(true)}
               style={styles.emptyButton}
             />
           </View>
@@ -136,33 +162,235 @@ export function HomeScreen({
               onChange={v => settingsStore.update({homeGroupBy: v})}
             />
             <View style={styles.list}>
-              {groupBy === 'relay'
-                ? groupByRelay(deployments, relays).map(g => (
+              {groupBy === 'relay' ? (
+                groupByRelay(deployments, relays).map(g => {
+                  const bs = g.relay ? bridgesOf(g.relay.id, bridges) : [];
+                  return (
                     <View key={g.relay?.id ?? 'unknown'} style={styles.group}>
                       <RelayHeader
                         name={g.relay?.name ?? 'Unknown relay'}
                         link={g.relay ? live[g.relay.id] : undefined}
                         count={g.items.length}
+                        bridges={bs.length}
                       />
-                      {g.items.length === 0 && (
-                        <Text style={styles.groupEmpty}>No deployments</Text>
+                      {g.items.length === 0 && bs.length === 0 && (
+                        <Text style={styles.groupEmpty}>
+                          Nothing on this relay
+                        </Text>
                       )}
                       {g.items.map(row)}
+                      {bs.map(x => bridgeRow(x.bridge, x.role))}
                     </View>
-                  ))
-                : deployments.map(row)}
+                  );
+                })
+              ) : (
+                <>
+                  {deployments.length > 0 && (
+                    <SectionHeader
+                      icon="globe"
+                      title="Deployments"
+                      hint="Public hostnames"
+                      count={deployments.length}
+                    />
+                  )}
+                  {deployments.map(row)}
+                  {bridges.length > 0 && (
+                    <SectionHeader
+                      icon="bridge"
+                      title="Bridges"
+                      hint="TCP and UDP ports"
+                      count={bridges.length}
+                    />
+                  )}
+                  {bridges.map(b => bridgeRow(b))}
+                </>
+              )}
             </View>
             <Button
-              label="New deployment"
+              label="New"
               icon="plus"
               kind="secondary"
-              onPress={() => onNavigate({name: 'deployment', id: null})}
+              onPress={() => setChoosing(true)}
               style={styles.newButton}
             />
           </>
         )}
       </ScrollView>
+      <NewChooser
+        visible={choosing}
+        onClose={() => setChoosing(false)}
+        onChoose={choose}
+      />
     </SpringyPull>
+  );
+}
+
+/** The bridges that listen on a relay ("from") or lead to it ("to"). */
+export function bridgesOf(
+  relayId: string,
+  bridges: Bridge[],
+): {bridge: Bridge; role: 'from' | 'to'}[] {
+  const out: {bridge: Bridge; role: 'from' | 'to'}[] = [];
+  for (const b of bridges) {
+    if (!b.public && b.fromRelayId === relayId)
+      out.push({bridge: b, role: 'from'});
+    if (b.toRelayId === relayId) out.push({bridge: b, role: 'to'});
+  }
+  return out;
+}
+
+/** "+ New": a deployment or a bridge. */
+function NewChooser({
+  visible,
+  onClose,
+  onChoose,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onChoose: (name: 'deployment' | 'bridge') => void;
+}) {
+  const theme = useTheme();
+  const styles = makeStyles(theme);
+  const options: {
+    name: 'deployment' | 'bridge';
+    icon: IconName;
+    title: string;
+    text: string;
+  }[] = [
+    {
+      name: 'deployment',
+      icon: 'globe',
+      title: 'Deployment',
+      text: 'A service at its own public hostname, with a certificate and sign-in in front. HTTP, HTTPS or SSH.',
+    },
+    {
+      name: 'bridge',
+      icon: 'bridge',
+      title: 'Bridge',
+      text: "A TCP or UDP port that leads to a service on a relay's network: on another relay's machine, or open to the internet on this server.",
+    },
+  ];
+  return (
+    <Overlay visible={visible} onClose={onClose} modal style={styles.sheetWrap}>
+      <View style={styles.sheet}>
+        <Text style={styles.sheetTitle}>New</Text>
+        {options.map(o => (
+          <Pressable
+            key={o.name}
+            style={({pressed}) => [styles.choice, pressed && styles.rowPressed]}
+            onPress={() => onChoose(o.name)}
+            accessibilityRole="button"
+            accessibilityLabel={`New ${o.title.toLowerCase()}`}>
+            <Icon name={o.icon} size={22} color={theme.primary} />
+            <View style={styles.rowBody}>
+              <Text style={styles.host}>{o.title}</Text>
+              <Text style={styles.choiceText}>{o.text}</Text>
+            </View>
+            <Icon name="chevron-right" size={18} color={theme.textMuted} />
+          </Pressable>
+        ))}
+      </View>
+    </Overlay>
+  );
+}
+
+function SectionHeader({
+  icon,
+  title,
+  hint,
+  count,
+}: {
+  icon: IconName;
+  title: string;
+  hint: string;
+  count: number;
+}) {
+  const theme = useTheme();
+  const styles = makeStyles(theme);
+  return (
+    <View style={styles.groupHeader} accessibilityRole="header">
+      <Icon name={icon} size={14} color={theme.textMuted} />
+      <Text style={styles.groupName}>{title}</Text>
+      <Text style={styles.groupMeta} numberOfLines={1}>
+        {hint} · {count}
+      </Text>
+    </View>
+  );
+}
+
+function BridgeRow({
+  b,
+  role,
+  line,
+  health,
+  onPress,
+}: {
+  b: Bridge;
+  /** under a relay: whether the bridge listens on it or leads to it */
+  role?: 'from' | 'to';
+  line: string;
+  health: {health: Health; detail: string};
+  onPress: () => void;
+}) {
+  const theme = useTheme();
+  const styles = makeStyles(theme);
+  const kind = b.public ? 'PUBLIC BRIDGE' : 'BRIDGE';
+  return (
+    <Pressable
+      style={({pressed}) => [
+        styles.row,
+        !b.enabled && styles.rowDisabled,
+        pressed && styles.rowPressed,
+      ]}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`Bridge ${b.name}, ${
+        b.enabled ? health.detail : 'disabled'
+      }`}>
+      <View style={styles.rowDot}>
+        <Dot color={healthColor(theme, health.health)} />
+      </View>
+      <View style={styles.rowBody}>
+        <Text
+          style={[styles.host, !b.enabled && styles.hostDisabled]}
+          numberOfLines={1}>
+          {role === 'from' ? '→ ' : role === 'to' ? '← ' : ''}
+          {b.name}
+        </Text>
+        <Text style={styles.target} numberOfLines={1}>
+          {line} · {b.protocol}
+        </Text>
+        <View style={styles.badges}>
+          <View style={[styles.badge, styles.badgeBridge]}>
+            <Icon name="bridge" size={12} color={theme.primary} />
+            <Text style={[styles.badgeText, styles.badgeBridgeText]}>
+              {kind}
+            </Text>
+          </View>
+          {!b.enabled ? (
+            <View style={[styles.badge, styles.badgeDisabled]}>
+              <Icon name="power-off" size={12} color={theme.text} />
+              <Text style={styles.badgeDisabledText}>DISABLED</Text>
+            </View>
+          ) : (
+            <>
+              {b.public && b.ipAllowlist.length > 0 && (
+                <View style={styles.badge}>
+                  <Icon name="shield" size={12} color={theme.textMuted} />
+                  <Text style={styles.badgeText}>IP allow list</Text>
+                </View>
+              )}
+              {health.health !== 'ok' && (
+                <Text style={styles.detail} numberOfLines={1}>
+                  {health.detail}
+                </Text>
+              )}
+            </>
+          )}
+        </View>
+      </View>
+      <Icon name="chevron-right" size={18} color={theme.textMuted} />
+    </Pressable>
   );
 }
 
@@ -188,10 +416,12 @@ function RelayHeader({
   name,
   link,
   count,
+  bridges,
 }: {
   name: string;
   link: RelayState | undefined;
   count: number;
+  bridges: number;
 }) {
   const theme = useTheme();
   const styles = makeStyles(theme);
@@ -205,6 +435,11 @@ function RelayHeader({
         {[
           link ? transportBadge(link) : 'offline',
           count === 1 ? '1 deployment' : `${count} deployments`,
+          bridges === 0
+            ? ''
+            : bridges === 1
+            ? '1 bridge'
+            : `${bridges} bridges`,
         ]
           .filter(Boolean)
           .join(' · ')}
@@ -396,6 +631,40 @@ function makeStyles(theme: Theme) {
     badgeText: {fontSize: 11, fontWeight: '600', color: theme.textMuted},
     badgeWarn: {backgroundColor: theme.warningBg},
     badgeWarnText: {color: theme.warning},
+    badgeBridge: {backgroundColor: theme.surfaceAlt},
+    badgeBridgeText: {
+      color: theme.primary,
+      fontWeight: '800',
+      letterSpacing: 0.5,
+    },
+    sheetWrap: {justifyContent: 'center', alignItems: 'center', padding: 16},
+    sheet: {
+      width: '100%',
+      maxWidth: 440,
+      padding: 16,
+      gap: 8,
+      borderRadius: 12,
+      backgroundColor: theme.bg,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    sheetTitle: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: theme.text,
+      marginBottom: 4,
+    },
+    choice: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      padding: 14,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: theme.border,
+      backgroundColor: theme.surface,
+    },
+    choiceText: {fontSize: 12, color: theme.textMuted, lineHeight: 17},
     detail: {fontSize: 11, color: theme.textMuted, flexShrink: 1},
     newButton: {marginTop: 8, alignSelf: 'center'},
     list: {marginTop: 12},

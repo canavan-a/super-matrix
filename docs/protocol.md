@@ -111,8 +111,9 @@ without QUIC.
 
    ```
    server → relay  {"type":"targets","targets":[{"id":"…","protocol":"http","host":"127.0.0.1","port":3000,"tlsSkipVerify":false,"sni":""}]}
-   relay → server  {"type":"hello","hello":{"version":"0.1.0","hostname":"homelab","fallback":"…"}}
-   relay → server  {"type":"health","health":{"<deployment id>":"ok"}}
+   server → relay  {"type":"listeners","listeners":[{"id":"…","protocol":"tcp","host":"127.0.0.1","port":5432}]}
+   relay → server  {"type":"hello","hello":{"version":"0.1.0","hostname":"homelab","fallback":"…","features":["bridge-tcp","bridge-udp"]}}
+   relay → server  {"type":"health","health":{"<deployment or bridge id>":"ok"}}
    ```
 
    `targets` is sent on connect and whenever the relay's deployments change;
@@ -313,14 +314,16 @@ tokens, below) and `ws` needs `Authorization: Bearer sms_…`.
 |---|---|
 | `POST /v1/login {password}` | root password → `{token, expiresAt}` (30 days); 10 attempts a minute per address |
 | `POST /v1/logout` | ends this session |
-| `GET /v1/info` | admin host, base domain, TLS on/off, version, the URL relays should use, the QUIC endpoint (or null) |
-| `GET /v1/status` | live relay state: `{relays: {<id>: {online, connectedAt, remote, version, hostname, health, transport, fallback, rttMs, bytesSent, bytesReceived, packetsLost, streams}}}` |
-| `GET/POST /v1/relays`, `PATCH/DELETE /v1/relays/:id` | relays; `POST` returns the token once. Deleting a relay that still has deployments is refused |
+| `GET /v1/info` | admin host, base domain, TLS on/off, version, the URL relays should use, the QUIC endpoint (or null), `publicPorts` (`""` when public bridges are off) |
+| `GET /v1/status` | live relay state: `{relays: {<id>: {online, connectedAt, remote, version, hostname, health, transport, fallback, rttMs, bytesSent, bytesReceived, packetsLost, streams, features}}, public: {<bridge id>: "ok" | "<listen error>"}}` (`public` only with public bridges on) |
+| `GET/POST /v1/relays`, `PATCH/DELETE /v1/relays/:id` | relays, with the `features` they last said they support and how many `bridges` use them; `POST` returns the token once. Deleting a relay that still has deployments or bridges is refused |
 | `POST /v1/relays/:id/rotate` | new token (shown once); the old one stops working and the relay is disconnected |
-| `GET/POST /v1/domains {name}`, `DELETE /v1/domains/:id` | domains: `name` is `*.example.com` (wildcard) or `status.foo.org` (exact). A domain in use can't be deleted |
+| `GET/POST /v1/domains {name}`, `DELETE /v1/domains/:id` | domains: `name` is `*.example.com` (wildcard) or `status.foo.org` (exact), with how many `deployments` and public `bridges` use them. A domain in use can't be deleted |
 | `GET /v1/domains/:id/dns` | whether the domain (for a wildcard, a random name under it) resolves to the same addresses as the admin host: `{ok, probe, addresses, expected, detail}` |
 | `GET/POST /v1/deployments`, `GET/PATCH/DELETE /v1/deployments/:id` | deployments (`domainId` + `subdomain`, which is ignored on an exact domain). Passwords go in as plaintext (`loginPassword`, `basicPassword`, at least 8 characters; `""` clears one) and are stored as bcrypt hashes. `protocol` is `http`, `https` or `ssh`; ssh deployments also have `sshCli`, `sshShell`, `sshUser` and the read-only `sshHostKey` (PATCH `""` forgets it). `rateLimitEnabled`, `rateLimitRequests`, `rateLimitPeriodS` (1 or 60), `rateLimitBurst` set the per-client-IP rate limit (see "Edge auth") |
 | `POST /v1/deployments/:id/tokens {name, expiresInS?}`, `DELETE …/tokens/:tid` | API tokens; `POST` returns the token once. `expiresInS` 0 or missing never expires |
+| `GET/POST /v1/bridges`, `GET/PATCH/DELETE /v1/bridges/:id` | bridges (below): `name`, `protocol` (`tcp`/`udp`), `enabled`, `public` or `fromRelayId` + `listenHost` (default `127.0.0.1`), `listenPort`, `toRelayId`, `targetHost`, `targetPort`, `udpIdleS` (30 s to 24 h, default 300), and for public bridges `ipAllowlist` and an optional DNS name (`domainId` + `subdomain`, `""` for none). Read-only: `host`, `publicAddress` (`host:port`, or the admin host's), `listenError`. 409 for a port clash, or a relay that doesn't support the protocol |
+| `GET /v1/bridges/:id/dns` | whether a public bridge's DNS name resolves to this server, as for domains |
 
 Sessions are tied to a fingerprint of the root password, so changing the
 password file and restarting signs every app out.
@@ -331,6 +334,67 @@ password file and restarting signs every app out.
 disconnects or reports health, and sends `{"type":"changed"}` when relays,
 deployments or certificates change, so the app refetches. A bad token closes
 the socket with code 4001.
+
+## Bridges
+
+A bridge is a TCP or UDP port that leads to `targetHost:targetPort` on the
+`to` relay's network. It listens on the `from` relay's machine, or for a
+public bridge on the server. The traffic rides the relay links above:
+
+```
+app ─▶ relay A :5432 ══ stream {"b":id} ══▶ server ══ stream {"d":id} ══▶ relay B ─▶ 127.0.0.1:5432
+```
+
+**Features.** A relay lists what it supports in its hello, `"features":
+["bridge-tcp","bridge-udp"]`; relays from before bridges list none. The
+server keeps the last list on the relay (`features` in `/v1/relays`). A
+bridge can't be created, turned on, or moved to other relays or another
+protocol unless both relays listed `bridge-<protocol>` (409). The server only
+sends a session the bridge targets and listeners its hello allows, and sends
+them again when a hello changes that.
+
+**The far end** (relay B) gets the bridge as an ordinary target,
+`{"id":"<bridge id>","protocol":"tcp"|"udp","host","port","idleS"}`, and
+serves it on a data stream like any deployment. So it still only dials what
+the server assigned it. `tcp` is a byte pipe. Health is a TCP connect for
+`tcp`, and always `"ok"` for `udp`, which has nothing to connect to.
+
+**The listening end** (relay A) gets `{"type":"listeners","listeners":[…]}`,
+always the full set, and listens on exactly those. A port it can't bind is
+retried every health round and reported as `"listen: <error>"` under the
+bridge's ID in `health`, otherwise `"ok"`. Listeners outlive reconnects; they
+open their streams on whichever session is current. For each TCP connection,
+the relay opens a stream and writes `{"b":"<bridge id>"}`. The server checks
+that the bridge exists, is on, listens on that relay, and that the relay
+listed the feature, then opens a stream to relay B with `{"d":"<bridge id>"}`
+and answers relay A `{}` (or `{"error"}`) once relay B has. From then on, the
+two streams are joined.
+
+**UDP** uses one stream per bridge, opened on the first packet (and again if
+it fails), carrying frames in both directions:
+
+```
+[4 bytes flow id][2 bytes length][payload]     big-endian
+```
+
+Relay A gives each sender (address and port) a flow ID. Relay B dials a
+UDP socket to the target for each flow ID it sees, and labels what comes back
+on it with the same ID. Relay A sends each reply to the flow's sender. Each
+side forgets a flow after `idleS` without a packet either way (default 300 s),
+and keeps at most 1024 at once, dropping the one quiet longest. A flow that
+relay B has forgotten just gets a new socket, and so a new source port, on
+its next packet. The stream is reliable and ordered, so packets aren't lost
+or reordered on the way, but they can be delayed.
+
+**Public bridges.** With `SUPERMATRIX_PUBLIC_PORTS` set (ports and ranges,
+e.g. `3478,20000-20100`), a bridge with `public: true` listens on the server,
+on `SUPERMATRIX_PUBLIC_ADDR` (default all addresses), at a port in that set.
+The server's own HTTP, HTTPS and QUIC ports are refused. The server plays
+relay A's part and opens each stream straight to relay B. The IP allow list
+is checked for each new connection or UDP sender, as the bridge is then.
+One address may hold 32 TCP connections or 64 UDP senders on a bridge,
+4096 in all. Bind errors show as `listenError` on the bridge and in
+`/v1/status`'s `public`; ports are retried every 30 s.
 
 ## Relays managing their deployments
 
@@ -368,6 +432,6 @@ delete | token`.
 
 SQLite at `DATA_DIR/supermatrix.db` (WAL, foreign keys), with migrations
 embedded from `server/database/migrations/sql`. Tables: `domains`, `relays`,
-`deployments`, `deployment_tokens`, `admin_sessions`. Every bearer secret
+`deployments`, `deployment_tokens`, `bridges`, `admin_sessions`. Every bearer secret
 (relay, session and API tokens) is 125 random bits, stored only as its
 SHA-256.

@@ -25,15 +25,40 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-// Target is one deployment as the relay sees it: where to forward.
+// Target is one deployment, or one bridge's far end, as the relay sees it:
+// where to forward.
 type Target struct {
 	ID            string `json:"id"`
-	Protocol      string `json:"protocol"` // http | https
+	Protocol      string `json:"protocol"` // http | https | ssh | tcp | udp
 	Host          string `json:"host"`
 	Port          int    `json:"port"`
 	TLSSkipVerify bool   `json:"tlsSkipVerify,omitempty"`
 	SNI           string `json:"sni,omitempty"`
+	// IdleS is how long a UDP flow may stay quiet (udp only).
+	IdleS int `json:"idleS,omitempty"`
 }
+
+// Listener is a bridge's near end: a port the relay listens on, whose
+// connections (or packets) it carries to the server on streams it opens.
+type Listener struct {
+	ID       string `json:"id"`
+	Protocol string `json:"protocol"` // tcp | udp
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	IdleS    int    `json:"idleS,omitempty"`
+}
+
+// Features a relay can list in its hello.
+const (
+	FeatureBridgeTCP = "bridge-tcp"
+	FeatureBridgeUDP = "bridge-udp"
+)
+
+// BridgeFeature is the feature a relay needs for a bridge of protocol p.
+func BridgeFeature(p string) string { return "bridge-" + p }
+
+// Features is what this build of the relay supports.
+var Features = []string{FeatureBridgeTCP, FeatureBridgeUDP}
 
 // Hello is what a relay says about itself when it connects.
 type Hello struct {
@@ -42,6 +67,19 @@ type Hello struct {
 	// Fallback says why a relay on the WebSocket isn't using QUIC: the
 	// QUIC error, or that it's configured or proxied that way.
 	Fallback string `json:"fallback,omitempty"`
+	// Features is what the relay supports beyond deployments (e.g.
+	// "bridge-tcp"); relays from before bridges send none.
+	Features []string `json:"features,omitempty"`
+}
+
+// HasFeature reports whether the hello listed f.
+func (h Hello) HasFeature(f string) bool {
+	for _, x := range h.Features {
+		if x == f {
+			return true
+		}
+	}
+	return false
 }
 
 // ALPN is the TLS protocol name relays use on the server's QUIC port.
@@ -79,18 +117,23 @@ type QUICEndpoint struct {
 // Control is one control-channel message.
 //
 //	server → relay  {"type":"targets","targets":[…]}
+//	server → relay  {"type":"listeners","listeners":[…]}
 //	relay → server  {"type":"hello","hello":{…}}
-//	relay → server  {"type":"health","health":{"<deployment>":"ok"|"<error>"}}
+//	relay → server  {"type":"health","health":{"<deployment or bridge>":"ok"|"<error>"}}
 type Control struct {
-	Type    string            `json:"type"`
-	Targets []Target          `json:"targets,omitempty"`
-	Hello   *Hello            `json:"hello,omitempty"`
-	Health  map[string]string `json:"health,omitempty"`
+	Type      string            `json:"type"`
+	Targets   []Target          `json:"targets,omitempty"`
+	Listeners []Listener        `json:"listeners,omitempty"`
+	Hello     *Hello            `json:"hello,omitempty"`
+	Health    map[string]string `json:"health,omitempty"`
 }
 
-// StreamHeader opens a data stream.
+// StreamHeader opens a data stream. The server names a deployment or
+// bridge target in Deployment; a relay opening a stream for one of its
+// listeners names the bridge in Bridge.
 type StreamHeader struct {
-	Deployment string `json:"d"`
+	Deployment string `json:"d,omitempty"`
+	Bridge     string `json:"b,omitempty"`
 }
 
 // StreamReply answers a StreamHeader; an empty Error means the target is
@@ -110,8 +153,8 @@ func muxConfig() *yamux.Config {
 	return c
 }
 
-// quicConfig is shared by both ends; the server only accepts the relay's
-// one control stream, the relay accepts as many data streams as come.
+// quicConfig is shared by both ends. Each accepts up to incomingStreams
+// streams at once: the relay its data streams, the server bridge streams.
 func quicConfig(incomingStreams int64) *quic.Config {
 	return &quic.Config{
 		HandshakeIdleTimeout:           5 * time.Second,

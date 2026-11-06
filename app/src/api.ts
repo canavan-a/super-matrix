@@ -62,6 +62,8 @@ export interface ServerInfo {
   quic: {addr: string; serverName: string; pin?: string} | null;
   /** whether email-code deployments can send codes (SMTP configured) */
   smtp: boolean;
+  /** ports public bridges may use, e.g. "20000-20100,3478"; "" when public bridges are off */
+  publicPorts: string;
 }
 
 export type Transport = 'quic' | 'websocket';
@@ -81,6 +83,10 @@ export interface Relay {
   fallback: string;
   /** whether the relay can manage its own deployments (CLI on its machine) */
   manageDeployments: boolean;
+  /** what it said it supports when it last connected, e.g. "bridge-tcp" */
+  features: string[];
+  /** bridges that listen on it or lead to it */
+  bridges: number;
 }
 
 /** A name deployments live on: "*.example.com" (each gets a subdomain) or an exact host like "status.foo.org". */
@@ -92,6 +98,8 @@ export interface Domain {
   /** "*.example.com" or "status.foo.org" */
   label: string;
   deployments: number;
+  /** public bridges named on it */
+  bridges: number;
   createdAt: string;
 }
 
@@ -209,6 +217,67 @@ export interface RelayState {
   packetsLost: number;
   /** upstream connections open through it now (pooled ones included) */
   streams: number;
+  /** what it supports beyond deployments, e.g. "bridge-tcp" */
+  features?: string[];
+}
+
+export type BridgeProtocol = 'tcp' | 'udp';
+
+/**
+ * A TCP or UDP port that leads to targetHost:targetPort on toRelay's network.
+ * It listens on fromRelay's machine, or (public) on the server itself.
+ */
+export interface Bridge {
+  id: string;
+  name: string;
+  protocol: BridgeProtocol;
+  enabled: boolean;
+  public: boolean;
+  /** host:port people reach a public bridge on; "" otherwise */
+  publicAddress: string;
+  /** "" for a public bridge */
+  fromRelayId: string;
+  listenHost: string;
+  listenPort: number;
+  toRelayId: string;
+  targetHost: string;
+  targetPort: number;
+  /** how long a quiet UDP sender keeps its flow */
+  udpIdleS: number;
+  /** public bridges only */
+  ipAllowlist: string[];
+  /** public bridges: the domain and label of its DNS name, and the name itself ("" for none) */
+  domainId: string;
+  subdomain: string;
+  host: string;
+  /** why a public bridge's port couldn't be bound; "" when it's fine */
+  listenError: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BridgeInput {
+  name?: string;
+  protocol?: BridgeProtocol;
+  enabled?: boolean;
+  public?: boolean;
+  fromRelayId?: string;
+  listenHost?: string;
+  listenPort?: number;
+  toRelayId?: string;
+  targetHost?: string;
+  targetPort?: number;
+  udpIdleS?: number;
+  ipAllowlist?: string[];
+  /** public bridges: "" for no DNS name */
+  domainId?: string;
+  subdomain?: string;
+}
+
+/** /v1/status: each online relay's live state, and each public bridge's listen status on the server. */
+export interface LiveStatus {
+  relays: Record<string, RelayState>;
+  public?: Record<string, string>;
 }
 
 // ---- endpoints ----
@@ -226,8 +295,7 @@ export const api = {
   login: (server: string, password: string) => request<{token: string; expiresAt: string}>(server, 'POST', '/v1/login', null, {password}),
   logout: (server: string, token: string) => request<void>(server, 'POST', '/v1/logout', token),
   info: (server: string, token: string) => request<ServerInfo>(server, 'GET', '/v1/info', token),
-  status: (server: string, token: string) =>
-    request<{relays: Record<string, RelayState>}>(server, 'GET', '/v1/status', token).then(r => r.relays),
+  status: (server: string, token: string) => request<LiveStatus>(server, 'GET', '/v1/status', token),
 
   relays: (server: string, token: string) => request<Relay[]>(server, 'GET', '/v1/relays', token),
   createRelay: (server: string, token: string, name: string) =>
@@ -256,4 +324,11 @@ export const api = {
     }),
   deleteToken: (server: string, token: string, id: string, tid: string) =>
     request<void>(server, 'DELETE', `/v1/deployments/${id}/tokens/${tid}`, token),
+
+  bridges: (server: string, token: string) => request<Bridge[]>(server, 'GET', '/v1/bridges', token),
+  createBridge: (server: string, token: string, b: BridgeInput) => request<Bridge>(server, 'POST', '/v1/bridges', token, b),
+  updateBridge: (server: string, token: string, id: string, b: BridgeInput) =>
+    request<Bridge>(server, 'PATCH', `/v1/bridges/${id}`, token, b),
+  deleteBridge: (server: string, token: string, id: string) => request<void>(server, 'DELETE', `/v1/bridges/${id}`, token),
+  bridgeDns: (server: string, token: string, id: string) => request<DomainDns>(server, 'GET', `/v1/bridges/${id}/dns`, token),
 };
