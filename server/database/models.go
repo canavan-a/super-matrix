@@ -169,6 +169,24 @@ type DeploymentToken struct {
 	ExpiresAt *time.Time
 }
 
+// PathRule layers an extra IP allowlist onto one path prefix (and
+// everything under it) of a Deployment, checked at the edge in addition
+// to (never instead of) the deployment's own IPAllowlist. IPAllowlist
+// here is empty by default, which adds no further restriction.
+type PathRule struct {
+	ID           string `gorm:"primaryKey"`
+	DeploymentID string
+	// PathPrefix is matched against the request path: the path itself, or
+	// anything under it ("/secret" matches "/secret" and "/secret/x", not
+	// "/secretly"). Always starts with "/".
+	PathPrefix string `gorm:"column:path_prefix"`
+	// IPAllowlist is newline-separated CIDRs/addresses, the same format as
+	// Deployment.IPAllowlist; empty adds no further restriction.
+	IPAllowlist string `gorm:"column:ip_allowlist"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 type AdminSession struct {
 	TokenHash  string `gorm:"primaryKey"`
 	PasswordFP string `gorm:"column:password_fp"`
