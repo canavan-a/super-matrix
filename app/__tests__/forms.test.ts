@@ -38,6 +38,7 @@ const existing: Deployment = {
   certExpiresAt: '2027-01-01T00:00:00Z',
   certError: '',
   tokens: [],
+  pathRules: [],
   createdAt: '',
   updatedAt: '',
 };

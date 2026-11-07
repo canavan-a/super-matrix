@@ -14,6 +14,8 @@ import {
   DeploymentInput,
   Domain,
   DomainDns,
+  PathRule,
+  PathRuleInput,
   Relay,
   RelayState,
   ServerInfo,
@@ -291,6 +293,23 @@ export async function createToken(id: string, name: string, expiresInS: number):
 
 export async function deleteToken(id: string, tid: string): Promise<void> {
   await authed((s, t) => api.deleteToken(s, t, id, tid));
+  await refresh().catch(() => {});
+}
+
+export async function createPathRule(id: string, input: PathRuleInput): Promise<PathRule> {
+  const r = await authed((s, t) => api.createPathRule(s, t, id, input));
+  await refresh().catch(() => {});
+  return r;
+}
+
+export async function updatePathRule(id: string, rid: string, input: PathRuleInput): Promise<PathRule> {
+  const r = await authed((s, t) => api.updatePathRule(s, t, id, rid, input));
+  await refresh().catch(() => {});
+  return r;
+}
+
+export async function deletePathRule(id: string, rid: string): Promise<void> {
+  await authed((s, t) => api.deletePathRule(s, t, id, rid));
   await refresh().catch(() => {});
 }
 

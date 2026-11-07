@@ -26,44 +26,45 @@ type tokenDTO struct {
 }
 
 type deploymentDTO struct {
-	ID                string     `json:"id"`
-	RelayID           string     `json:"relayId"`
-	DomainID          string     `json:"domainId"`
-	Subdomain         string     `json:"subdomain"`
-	Host              string     `json:"host"`
-	URL               string     `json:"url"`
-	Protocol          string     `json:"protocol"`
-	TargetHost        string     `json:"targetHost"`
-	TargetPort        int        `json:"targetPort"`
-	TLSSkipVerify     bool       `json:"tlsSkipVerify"`
-	SNI               string     `json:"sni"`
-	PreserveHost      bool       `json:"preserveHost"`
-	Enabled           bool       `json:"enabled"`
-	AuthMode          string     `json:"authMode"`
-	HasLoginPassword  bool       `json:"hasLoginPassword"`
-	AllowRootLogin    bool       `json:"allowRootLogin"`
-	SessionTTLS       int        `json:"sessionTtlS"`
-	BasicUser         string     `json:"basicUser"`
-	HasBasicPassword  bool       `json:"hasBasicPassword"`
-	OTPEmails         []string   `json:"otpEmails"`
-	IPAllowlist       []string   `json:"ipAllowlist"`
-	SSHCLI            bool       `json:"sshCli"`
-	SSHShell          bool       `json:"sshShell"`
-	SSHUser           string     `json:"sshUser"`
-	SSHHostKey        string     `json:"sshHostKey"`
-	RateLimitEnabled  bool       `json:"rateLimitEnabled"`
-	RateLimitRequests int        `json:"rateLimitRequests"`
-	RateLimitPeriodS  int        `json:"rateLimitPeriodS"`
-	RateLimitBurst    int        `json:"rateLimitBurst"`
-	CertStatus        string     `json:"certStatus"`
-	CertExpiresAt     *time.Time `json:"certExpiresAt"`
-	CertError         string     `json:"certError"`
-	Tokens            []tokenDTO `json:"tokens"`
-	CreatedAt         time.Time  `json:"createdAt"`
-	UpdatedAt         time.Time  `json:"updatedAt"`
+	ID                string        `json:"id"`
+	RelayID           string        `json:"relayId"`
+	DomainID          string        `json:"domainId"`
+	Subdomain         string        `json:"subdomain"`
+	Host              string        `json:"host"`
+	URL               string        `json:"url"`
+	Protocol          string        `json:"protocol"`
+	TargetHost        string        `json:"targetHost"`
+	TargetPort        int           `json:"targetPort"`
+	TLSSkipVerify     bool          `json:"tlsSkipVerify"`
+	SNI               string        `json:"sni"`
+	PreserveHost      bool          `json:"preserveHost"`
+	Enabled           bool          `json:"enabled"`
+	AuthMode          string        `json:"authMode"`
+	HasLoginPassword  bool          `json:"hasLoginPassword"`
+	AllowRootLogin    bool          `json:"allowRootLogin"`
+	SessionTTLS       int           `json:"sessionTtlS"`
+	BasicUser         string        `json:"basicUser"`
+	HasBasicPassword  bool          `json:"hasBasicPassword"`
+	OTPEmails         []string      `json:"otpEmails"`
+	IPAllowlist       []string      `json:"ipAllowlist"`
+	SSHCLI            bool          `json:"sshCli"`
+	SSHShell          bool          `json:"sshShell"`
+	SSHUser           string        `json:"sshUser"`
+	SSHHostKey        string        `json:"sshHostKey"`
+	RateLimitEnabled  bool          `json:"rateLimitEnabled"`
+	RateLimitRequests int           `json:"rateLimitRequests"`
+	RateLimitPeriodS  int           `json:"rateLimitPeriodS"`
+	RateLimitBurst    int           `json:"rateLimitBurst"`
+	CertStatus        string        `json:"certStatus"`
+	CertExpiresAt     *time.Time    `json:"certExpiresAt"`
+	CertError         string        `json:"certError"`
+	Tokens            []tokenDTO    `json:"tokens"`
+	PathRules         []pathRuleDTO `json:"pathRules"`
+	CreatedAt         time.Time     `json:"createdAt"`
+	UpdatedAt         time.Time     `json:"updatedAt"`
 }
 
-func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []database.DeploymentToken) deploymentDTO {
+func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []database.DeploymentToken, rules []database.PathRule) deploymentDTO {
 	host, domainID := "", ""
 	if d.Host != nil {
 		host = *d.Host
@@ -81,10 +82,13 @@ func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []databa
 		SSHCLI: d.SSHCLI, SSHShell: d.SSHShell, SSHUser: d.SSHUser, SSHHostKey: d.SSHHostKey,
 		RateLimitEnabled: d.RateLimitEnabled, RateLimitRequests: d.RateLimitRequests,
 		RateLimitPeriodS: d.RateLimitPeriodS, RateLimitBurst: d.RateLimitBurst,
-		CertError: d.CertError, Tokens: []tokenDTO{}, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
+		CertError: d.CertError, Tokens: []tokenDTO{}, PathRules: []pathRuleDTO{}, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
 	}
 	for _, t := range toks {
 		out.Tokens = append(out.Tokens, tokenDTO{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt, ExpiresAt: t.ExpiresAt})
+	}
+	for _, r := range rules {
+		out.PathRules = append(out.PathRules, pathRuleOut(r))
 	}
 	return out
 }
@@ -133,9 +137,10 @@ func (a *API) listDeployments(c *gin.Context) {
 		ids = append(ids, d.ID)
 	}
 	toks := a.tokensOf(ids...)
+	rules := a.pathRulesOf(ids...)
 	out := make([]deploymentDTO, 0, len(ds))
 	for _, d := range ds {
-		out = append(out, a.deploymentOut(c, d, toks[d.ID]))
+		out = append(out, a.deploymentOut(c, d, toks[d.ID], rules[d.ID]))
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -145,7 +150,7 @@ func (a *API) getDeployment(c *gin.Context) {
 	if d == nil {
 		return
 	}
-	c.JSON(http.StatusOK, a.deploymentOut(c, *d, a.tokensOf(d.ID)[d.ID]))
+	c.JSON(http.StatusOK, a.deploymentOut(c, *d, a.tokensOf(d.ID)[d.ID], a.pathRulesOf(d.ID)[d.ID]))
 }
 
 // deploymentInput is the body of create (missing fields take defaults) and
@@ -456,7 +461,7 @@ func (a *API) createDeployment(c *gin.Context) {
 		return
 	}
 	a.changed()
-	c.JSON(http.StatusCreated, a.deploymentOut(c, d, nil))
+	c.JSON(http.StatusCreated, a.deploymentOut(c, d, nil, nil))
 }
 
 func (a *API) updateDeployment(c *gin.Context) {
@@ -485,7 +490,7 @@ func (a *API) updateDeployment(c *gin.Context) {
 		return
 	}
 	a.changed()
-	c.JSON(http.StatusOK, a.deploymentOut(c, *d, a.tokensOf(d.ID)[d.ID]))
+	c.JSON(http.StatusOK, a.deploymentOut(c, *d, a.tokensOf(d.ID)[d.ID], a.pathRulesOf(d.ID)[d.ID]))
 }
 
 func (a *API) deleteDeployment(c *gin.Context) {

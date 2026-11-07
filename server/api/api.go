@@ -155,6 +155,9 @@ func (a *API) Router() *gin.Engine {
 	admin.POST("/deployments/:id/cert", a.retryCert)
 	admin.POST("/deployments/:id/tokens", a.createToken)
 	admin.DELETE("/deployments/:id/tokens/:tid", a.deleteToken)
+	admin.POST("/deployments/:id/path-rules", a.createPathRule)
+	admin.PATCH("/deployments/:id/path-rules/:rid", a.updatePathRule)
+	admin.DELETE("/deployments/:id/path-rules/:rid", a.deletePathRule)
 
 	admin.GET("/bridges", a.listBridges)
 	admin.POST("/bridges", a.createBridge)

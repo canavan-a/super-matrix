@@ -122,6 +122,21 @@ export interface DeploymentToken {
   expiresAt: string | null;
 }
 
+export interface PathRule {
+  id: string;
+  /** "/secret" matches "/secret" and "/secret/x", not "/secretly" */
+  pathPrefix: string;
+  ipAllowlist: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A create or update; missing fields stay as they are on update. */
+export interface PathRuleInput {
+  pathPrefix?: string;
+  ipAllowlist?: string[];
+}
+
 export interface Deployment {
   id: string;
   relayId: string;
@@ -162,6 +177,7 @@ export interface Deployment {
   certExpiresAt: string | null;
   certError: string;
   tokens: DeploymentToken[];
+  pathRules: PathRule[];
   createdAt: string;
   updatedAt: string;
 }
@@ -324,6 +340,12 @@ export const api = {
     }),
   deleteToken: (server: string, token: string, id: string, tid: string) =>
     request<void>(server, 'DELETE', `/v1/deployments/${id}/tokens/${tid}`, token),
+  createPathRule: (server: string, token: string, id: string, r: PathRuleInput) =>
+    request<PathRule>(server, 'POST', `/v1/deployments/${id}/path-rules`, token, r),
+  updatePathRule: (server: string, token: string, id: string, rid: string, r: PathRuleInput) =>
+    request<PathRule>(server, 'PATCH', `/v1/deployments/${id}/path-rules/${rid}`, token, r),
+  deletePathRule: (server: string, token: string, id: string, rid: string) =>
+    request<void>(server, 'DELETE', `/v1/deployments/${id}/path-rules/${rid}`, token),
 
   bridges: (server: string, token: string) => request<Bridge[]>(server, 'GET', '/v1/bridges', token),
   createBridge: (server: string, token: string, b: BridgeInput) => request<Bridge>(server, 'POST', '/v1/bridges', token, b),
