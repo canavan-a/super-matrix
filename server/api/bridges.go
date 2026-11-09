@@ -34,6 +34,8 @@ type bridgeDTO struct {
 	TargetPort    int      `json:"targetPort"`
 	UDPIdleS      int      `json:"udpIdleS"`
 	IPAllowlist   []string `json:"ipAllowlist"`
+	// IPGroups is the IDs of the IP groups the allow list includes.
+	IPGroups []string `json:"ipGroups"`
 	// DomainID and Subdomain give a public bridge the DNS name Host; ""
 	// when it has none (its address is then the admin host's).
 	DomainID  string `json:"domainId"`
@@ -45,12 +47,24 @@ type bridgeDTO struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
-func (a *API) bridgeOut(b database.Bridge) bridgeDTO {
+func (a *API) bridgeIPGroups(ids ...string) map[string][]string {
+	return a.ipGroupIDsOf(&database.BridgeIPGroup{}, "bridge_id", ids...)
+}
+
+// bridgeFull is b as the API returns it, with its IP groups.
+func (a *API) bridgeFull(b database.Bridge) bridgeDTO {
+	return a.bridgeOut(b, a.bridgeIPGroups(b.ID)[b.ID])
+}
+
+func (a *API) bridgeOut(b database.Bridge, groups []string) bridgeDTO {
+	if groups == nil {
+		groups = []string{}
+	}
 	out := bridgeDTO{
 		ID: b.ID, Name: b.Name, Protocol: b.Protocol, Enabled: b.Enabled, Public: b.Public(),
 		ListenHost: b.ListenHost, ListenPort: b.ListenPort, ToRelayID: b.ToRelayID,
 		TargetHost: b.TargetHost, TargetPort: b.TargetPort, UDPIdleS: b.UDPIdleS,
-		IPAllowlist: splitAllowlist(b.IPAllowlist), CreatedAt: b.CreatedAt, UpdatedAt: b.UpdatedAt,
+		IPAllowlist: splitAllowlist(b.IPAllowlist), IPGroups: groups, CreatedAt: b.CreatedAt, UpdatedAt: b.UpdatedAt,
 	}
 	if b.DomainID != nil {
 		out.DomainID, out.Subdomain, out.Host = *b.DomainID, b.Subdomain, b.Host
@@ -92,15 +106,20 @@ func (a *API) listBridges(c *gin.Context) {
 		return
 	}
 	out := make([]bridgeDTO, 0, len(bs))
+	ids := make([]string, 0, len(bs))
 	for _, b := range bs {
-		out = append(out, a.bridgeOut(b))
+		ids = append(ids, b.ID)
+	}
+	groups := a.bridgeIPGroups(ids...)
+	for _, b := range bs {
+		out = append(out, a.bridgeOut(b, groups[b.ID]))
 	}
 	c.JSON(http.StatusOK, out)
 }
 
 func (a *API) getBridge(c *gin.Context) {
 	if b := a.findBridge(c); b != nil {
-		c.JSON(http.StatusOK, a.bridgeOut(*b))
+		c.JSON(http.StatusOK, a.bridgeFull(*b))
 	}
 }
 
@@ -121,6 +140,8 @@ type bridgeInput struct {
 	TargetPort  *int      `json:"targetPort"`
 	UDPIdleS    *int      `json:"udpIdleS"`
 	IPAllowlist *[]string `json:"ipAllowlist"`
+	// IPGroups replaces the IP groups the allow list includes, by ID.
+	IPGroups *[]string `json:"ipGroups"`
 	// DomainID (public bridges): a domain for its DNS name; "" for none.
 	// Subdomain is the label under a wildcard domain.
 	DomainID  *string `json:"domainId"`
@@ -319,6 +340,10 @@ func bridgeWriteFail(c *gin.Context, b *database.Bridge, err error) {
 		}
 		return
 	}
+	if errors.Is(err, gorm.ErrForeignKeyViolated) {
+		abort(c, http.StatusBadRequest, "a relay, domain or IP group it names was just deleted; reload and try again")
+		return
+	}
 	abort(c, http.StatusInternalServerError, "server error")
 }
 
@@ -345,12 +370,23 @@ func (a *API) createBridge(c *gin.Context) {
 		a.bridgeFail(c, err)
 		return
 	}
-	if err := a.db.Create(&b).Error; err != nil {
+	groups, err := a.cleanIPGroupIDs(in.IPGroups)
+	if err != nil {
+		a.inputFail(c, err)
+		return
+	}
+	err = a.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&b).Error; err != nil {
+			return err
+		}
+		return setBridgeIPGroups(tx, b.ID, groups)
+	})
+	if err != nil {
 		bridgeWriteFail(c, &b, err)
 		return
 	}
 	a.changed()
-	c.JSON(http.StatusCreated, a.bridgeOut(b))
+	c.JSON(http.StatusCreated, a.bridgeFull(b))
 }
 
 func (a *API) updateBridge(c *gin.Context) {
@@ -369,12 +405,26 @@ func (a *API) updateBridge(c *gin.Context) {
 	}
 	b.UpdatedAt = a.now()
 	// Save with a nil FromRelayID writes NULL, which is what public means.
-	if err := a.db.Select("*").Save(b).Error; err != nil {
+	groups, err := a.cleanIPGroupIDs(in.IPGroups)
+	if err != nil {
+		a.inputFail(c, err)
+		return
+	}
+	err = a.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Select("*").Save(b).Error; err != nil {
+			return err
+		}
+		if groups == nil {
+			return nil
+		}
+		return setBridgeIPGroups(tx, b.ID, groups)
+	})
+	if err != nil {
 		bridgeWriteFail(c, b, err)
 		return
 	}
 	a.changed()
-	c.JSON(http.StatusOK, a.bridgeOut(*b))
+	c.JSON(http.StatusOK, a.bridgeFull(*b))
 }
 
 func (a *API) deleteBridge(c *gin.Context) {

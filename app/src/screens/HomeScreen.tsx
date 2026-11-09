@@ -374,7 +374,7 @@ function BridgeRow({
             </View>
           ) : (
             <>
-              {b.public && b.ipAllowlist.length > 0 && (
+              {b.public && (b.ipAllowlist.length > 0 || b.ipGroups.length > 0) && (
                 <View style={styles.badge}>
                   <Icon name="shield" size={12} color={theme.textMuted} />
                   <Text style={styles.badgeText}>IP allow list</Text>
@@ -532,7 +532,7 @@ function DeploymentRow({
                 </Text>
               </View>
             )}
-            {d.ipAllowlist.length > 0 && (
+            {(d.ipAllowlist.length > 0 || d.ipGroups.length > 0) && (
               <View style={styles.badge}>
                 <Icon name="shield" size={12} color={theme.textMuted} />
                 <Text style={styles.badgeText}>IP allow list</Text>

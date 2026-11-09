@@ -248,3 +248,32 @@ func (d Domain) HostFor(sub string) string {
 	}
 	return d.Name
 }
+
+// IPGroup is a named set of addresses and CIDR ranges that allow lists
+// can include by reference.
+type IPGroup struct {
+	ID   string `gorm:"primaryKey"`
+	Name string
+	// Entries is newline-separated CIDRs, as in IPAllowlist.
+	Entries   string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (IPGroup) TableName() string { return "ip_groups" }
+
+// DeploymentIPGroup includes an IP group in a deployment's allow list.
+type DeploymentIPGroup struct {
+	DeploymentID string `gorm:"primaryKey"`
+	IPGroupID    string `gorm:"primaryKey;column:ip_group_id"`
+}
+
+func (DeploymentIPGroup) TableName() string { return "deployment_ip_groups" }
+
+// BridgeIPGroup includes an IP group in a public bridge's allow list.
+type BridgeIPGroup struct {
+	BridgeID  string `gorm:"primaryKey"`
+	IPGroupID string `gorm:"primaryKey;column:ip_group_id"`
+}
+
+func (BridgeIPGroup) TableName() string { return "bridge_ip_groups" }

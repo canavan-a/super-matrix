@@ -156,6 +156,12 @@ func (a *API) Router() *gin.Engine {
 	admin.POST("/deployments/:id/tokens", a.createToken)
 	admin.DELETE("/deployments/:id/tokens/:tid", a.deleteToken)
 
+	admin.GET("/ip-groups", a.listIPGroups)
+	admin.POST("/ip-groups", a.createIPGroup)
+	admin.GET("/ip-groups/:id", a.getIPGroup)
+	admin.PATCH("/ip-groups/:id", a.updateIPGroup)
+	admin.DELETE("/ip-groups/:id", a.deleteIPGroup)
+
 	admin.GET("/bridges", a.listBridges)
 	admin.POST("/bridges", a.createBridge)
 	admin.GET("/bridges/:id", a.getBridge)

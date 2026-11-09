@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 
 	"main/database"
 	"main/edge"
@@ -26,27 +27,29 @@ type tokenDTO struct {
 }
 
 type deploymentDTO struct {
-	ID                string     `json:"id"`
-	RelayID           string     `json:"relayId"`
-	DomainID          string     `json:"domainId"`
-	Subdomain         string     `json:"subdomain"`
-	Host              string     `json:"host"`
-	URL               string     `json:"url"`
-	Protocol          string     `json:"protocol"`
-	TargetHost        string     `json:"targetHost"`
-	TargetPort        int        `json:"targetPort"`
-	TLSSkipVerify     bool       `json:"tlsSkipVerify"`
-	SNI               string     `json:"sni"`
-	PreserveHost      bool       `json:"preserveHost"`
-	Enabled           bool       `json:"enabled"`
-	AuthMode          string     `json:"authMode"`
-	HasLoginPassword  bool       `json:"hasLoginPassword"`
-	AllowRootLogin    bool       `json:"allowRootLogin"`
-	SessionTTLS       int        `json:"sessionTtlS"`
-	BasicUser         string     `json:"basicUser"`
-	HasBasicPassword  bool       `json:"hasBasicPassword"`
-	OTPEmails         []string   `json:"otpEmails"`
-	IPAllowlist       []string   `json:"ipAllowlist"`
+	ID               string   `json:"id"`
+	RelayID          string   `json:"relayId"`
+	DomainID         string   `json:"domainId"`
+	Subdomain        string   `json:"subdomain"`
+	Host             string   `json:"host"`
+	URL              string   `json:"url"`
+	Protocol         string   `json:"protocol"`
+	TargetHost       string   `json:"targetHost"`
+	TargetPort       int      `json:"targetPort"`
+	TLSSkipVerify    bool     `json:"tlsSkipVerify"`
+	SNI              string   `json:"sni"`
+	PreserveHost     bool     `json:"preserveHost"`
+	Enabled          bool     `json:"enabled"`
+	AuthMode         string   `json:"authMode"`
+	HasLoginPassword bool     `json:"hasLoginPassword"`
+	AllowRootLogin   bool     `json:"allowRootLogin"`
+	SessionTTLS      int      `json:"sessionTtlS"`
+	BasicUser        string   `json:"basicUser"`
+	HasBasicPassword bool     `json:"hasBasicPassword"`
+	OTPEmails        []string `json:"otpEmails"`
+	IPAllowlist      []string `json:"ipAllowlist"`
+	// IPGroups is the IDs of the IP groups the allow list includes.
+	IPGroups          []string   `json:"ipGroups"`
 	SSHCLI            bool       `json:"sshCli"`
 	SSHShell          bool       `json:"sshShell"`
 	SSHUser           string     `json:"sshUser"`
@@ -63,7 +66,7 @@ type deploymentDTO struct {
 	UpdatedAt         time.Time  `json:"updatedAt"`
 }
 
-func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []database.DeploymentToken) deploymentDTO {
+func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []database.DeploymentToken, groups []string) deploymentDTO {
 	host, domainID := "", ""
 	if d.Host != nil {
 		host = *d.Host
@@ -81,7 +84,10 @@ func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []databa
 		SSHCLI: d.SSHCLI, SSHShell: d.SSHShell, SSHUser: d.SSHUser, SSHHostKey: d.SSHHostKey,
 		RateLimitEnabled: d.RateLimitEnabled, RateLimitRequests: d.RateLimitRequests,
 		RateLimitPeriodS: d.RateLimitPeriodS, RateLimitBurst: d.RateLimitBurst,
-		CertError: d.CertError, Tokens: []tokenDTO{}, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
+		CertError: d.CertError, Tokens: []tokenDTO{}, IPGroups: groups, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
+	}
+	if out.IPGroups == nil {
+		out.IPGroups = []string{}
 	}
 	for _, t := range toks {
 		out.Tokens = append(out.Tokens, tokenDTO{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt, ExpiresAt: t.ExpiresAt})
@@ -133,11 +139,21 @@ func (a *API) listDeployments(c *gin.Context) {
 		ids = append(ids, d.ID)
 	}
 	toks := a.tokensOf(ids...)
+	groups := a.deploymentIPGroups(ids...)
 	out := make([]deploymentDTO, 0, len(ds))
 	for _, d := range ds {
-		out = append(out, a.deploymentOut(c, d, toks[d.ID]))
+		out = append(out, a.deploymentOut(c, d, toks[d.ID], groups[d.ID]))
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+func (a *API) deploymentIPGroups(ids ...string) map[string][]string {
+	return a.ipGroupIDsOf(&database.DeploymentIPGroup{}, "deployment_id", ids...)
+}
+
+// deploymentFull is d as the API returns it, with its tokens and groups.
+func (a *API) deploymentFull(c *gin.Context, d database.Deployment) deploymentDTO {
+	return a.deploymentOut(c, d, a.tokensOf(d.ID)[d.ID], a.deploymentIPGroups(d.ID)[d.ID])
 }
 
 func (a *API) getDeployment(c *gin.Context) {
@@ -145,7 +161,7 @@ func (a *API) getDeployment(c *gin.Context) {
 	if d == nil {
 		return
 	}
-	c.JSON(http.StatusOK, a.deploymentOut(c, *d, a.tokensOf(d.ID)[d.ID]))
+	c.JSON(http.StatusOK, a.deploymentFull(c, *d))
 }
 
 // deploymentInput is the body of create (missing fields take defaults) and
@@ -170,9 +186,11 @@ type deploymentInput struct {
 	BasicPassword  *string   `json:"basicPassword"`
 	OTPEmails      *[]string `json:"otpEmails"`
 	IPAllowlist    *[]string `json:"ipAllowlist"`
-	SSHCLI         *bool     `json:"sshCli"`
-	SSHShell       *bool     `json:"sshShell"`
-	SSHUser        *string   `json:"sshUser"`
+	// IPGroups replaces the IP groups the allow list includes, by ID.
+	IPGroups *[]string `json:"ipGroups"`
+	SSHCLI   *bool     `json:"sshCli"`
+	SSHShell *bool     `json:"sshShell"`
+	SSHUser  *string   `json:"sshUser"`
 	// SSHHostKey can only be cleared (""), so the shell trusts the next key.
 	SSHHostKey *string `json:"sshHostKey"`
 	// RateLimitPeriodS is the sustained window's length in seconds (60 =
@@ -451,12 +469,23 @@ func (a *API) createDeployment(c *gin.Context) {
 	if !a.cfg.TLSOn() {
 		d.CertStatus = database.CertOff
 	}
-	if err := a.db.Create(&d).Error; err != nil {
-		abort(c, http.StatusInternalServerError, "server error")
+	groups, err := a.cleanIPGroupIDs(in.IPGroups)
+	if err != nil {
+		a.inputFail(c, err)
+		return
+	}
+	err = a.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&d).Error; err != nil {
+			return err
+		}
+		return setDeploymentIPGroups(tx, d.ID, groups)
+	})
+	if err != nil {
+		groupWriteFail(c, err)
 		return
 	}
 	a.changed()
-	c.JSON(http.StatusCreated, a.deploymentOut(c, d, nil))
+	c.JSON(http.StatusCreated, a.deploymentFull(c, d))
 }
 
 func (a *API) updateDeployment(c *gin.Context) {
@@ -480,12 +509,26 @@ func (a *API) updateDeployment(c *gin.Context) {
 		d.CertStatus = database.CertOff
 	}
 	d.UpdatedAt = a.now()
-	if err := a.db.Save(d).Error; err != nil {
-		abort(c, http.StatusInternalServerError, "server error")
+	groups, err := a.cleanIPGroupIDs(in.IPGroups)
+	if err != nil {
+		a.inputFail(c, err)
+		return
+	}
+	err = a.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(d).Error; err != nil {
+			return err
+		}
+		if groups == nil {
+			return nil
+		}
+		return setDeploymentIPGroups(tx, d.ID, groups)
+	})
+	if err != nil {
+		groupWriteFail(c, err)
 		return
 	}
 	a.changed()
-	c.JSON(http.StatusOK, a.deploymentOut(c, *d, a.tokensOf(d.ID)[d.ID]))
+	c.JSON(http.StatusOK, a.deploymentFull(c, *d))
 }
 
 func (a *API) deleteDeployment(c *gin.Context) {
