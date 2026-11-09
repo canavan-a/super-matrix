@@ -9,6 +9,7 @@ import {
   Relay,
   RelayState,
 } from '../api';
+import {IPGroupPicker} from '../components/IPGroupPicker';
 import {Notice} from '../components/Notice';
 import {
   Button,
@@ -53,6 +54,8 @@ export interface BridgeForm {
   udpIdleS: number;
   /** one CIDR or address per line (public bridges) */
   ipAllowlist: string;
+  /** public bridges: IDs of the IP groups the allow list includes */
+  ipGroups: string[];
   /** public bridges: the domain for its DNS name ("" for none), and the label under a wildcard one */
   domainId: string;
   subdomain: string;
@@ -71,6 +74,7 @@ export function bridgeFormFrom(b: Bridge | null): BridgeForm {
     targetPort: b ? String(b.targetPort) : '',
     udpIdleS: b?.udpIdleS ?? 300,
     ipAllowlist: (b?.ipAllowlist ?? []).join('\n'),
+    ipGroups: b?.ipGroups ?? [],
     domainId: b?.domainId ?? '',
     subdomain: b?.subdomain ?? '',
   };
@@ -97,6 +101,7 @@ export function bridgeFormToInput(f: BridgeForm): BridgeInput {
           .map(s => s.trim())
           .filter(Boolean)
       : [],
+    ipGroups: pub ? f.ipGroups : [],
     ...(pub
       ? {domainId: f.domainId, subdomain: f.subdomain.trim().toLowerCase()}
       : {}),
@@ -350,8 +355,13 @@ export function BridgeScreen({
             accessibilityLabel="IP allow list"
           />
           <Hint>
-            One address or CIDR range per line. Empty lets every address in.
+            One address or CIDR range per line. Empty (and no IP groups) lets
+            every address in.
           </Hint>
+          <IPGroupPicker
+            value={form.ipGroups}
+            onChange={v => set({ipGroups: v})}
+          />
         </>
       ) : (
         <>

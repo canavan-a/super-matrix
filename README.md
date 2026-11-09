@@ -32,7 +32,9 @@ wherever the services run. No open ports at home, no third party in the path.
   password, the root password, or both), email codes for a list of addresses,
   HTTP basic auth, API tokens only, or public. API tokens
   (`Authorization: Bearer`, optionally expiring) also get past any of the
-  sign-ins, for scripts. An IP allow list works with any of them. Credentials are checked and stripped at the server; the service never
+  sign-ins, for scripts. An IP allow list works with any of them, and can
+  include **IP groups**: named address lists kept in one place and reused
+  across deployments and public bridges. Credentials are checked and stripped at the server; the service never
   sees them.
 - **A rate limit per deployment**, by client address: a sustained
   requests-per-second or -minute cap, with an optional short burst

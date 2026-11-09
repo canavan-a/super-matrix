@@ -96,6 +96,37 @@ export function Button({
   );
 }
 
+/** Any number of options, as a row of chips that toggle. */
+export function MultiChips<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: {value: T; label: string}[];
+  value: T[];
+  onChange: (v: T[]) => void;
+}) {
+  const s = makeStyles(useTheme());
+  return (
+    <View style={s.chips}>
+      {options.map(o => {
+        const on = value.includes(o.value);
+        return (
+          <Pressable
+            key={o.value}
+            style={[s.chip, on && s.chipOn]}
+            onPress={() => onChange(on ? value.filter(v => v !== o.value) : [...value, o.value])}
+            accessibilityRole="checkbox"
+            accessibilityLabel={o.label}
+            accessibilityState={{checked: on}}>
+            <Text style={[s.chipText, on && s.chipOnText]}>{o.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 /** One of a few options, as a row of chips. */
 export function Chips<T extends string | number>({
   options,

@@ -32,6 +32,7 @@ import {DeploymentScreen} from './screens/DeploymentScreen';
 import {HomeScreen} from './screens/HomeScreen';
 import {LoginScreen} from './screens/LoginScreen';
 import {DomainsScreen} from './screens/DomainsScreen';
+import {IPGroupsScreen} from './screens/IPGroupsScreen';
 import {RelaysScreen} from './screens/RelaysScreen';
 import {SettingsScreen} from './screens/SettingsScreen';
 import {init, useStore, wake} from './store';
@@ -73,6 +74,7 @@ const TITLES: Record<Route['name'], string> = {
   bridge: 'Bridge',
   relays: 'Relays',
   domains: 'Domains',
+  ipGroups: 'IP groups',
   settings: 'Settings',
 };
 
@@ -209,6 +211,9 @@ function AppInner(): React.JSX.Element {
             <Pressable style={styles.headerIconButton} onPress={() => navigate({name: 'domains'})} accessibilityLabel="Domains">
               <Icon name="globe" size={20} color={theme.text} />
             </Pressable>
+            <Pressable style={styles.headerIconButton} onPress={() => navigate({name: 'ipGroups'})} accessibilityLabel="IP groups">
+              <Icon name="network" size={20} color={theme.text} />
+            </Pressable>
             <Pressable style={styles.headerIconButton} onPress={() => navigate({name: 'relays'})} accessibilityLabel="Relays">
               <Icon name="server" size={20} color={theme.text} />
             </Pressable>
@@ -225,6 +230,7 @@ function AppInner(): React.JSX.Element {
         {route.name === 'bridge' && <BridgeScreen key={route.id ?? 'new'} id={route.id} onNavigate={navigate} />}
         {route.name === 'relays' && <RelaysScreen />}
         {route.name === 'domains' && <DomainsScreen />}
+        {route.name === 'ipGroups' && <IPGroupsScreen />}
         {route.name === 'settings' && <SettingsScreen />}
       </View>
       {/* Modal sheets (Overlay modal), over everything. */}

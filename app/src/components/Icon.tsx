@@ -13,6 +13,7 @@ import {
   Lock,
   LogOut,
   Mail,
+  Network,
   PowerOff,
   LucideIcon,
   Plus,
@@ -47,7 +48,8 @@ export type IconName =
   | 'logout'
   | 'power-off'
   | 'mail'
-  | 'bridge';
+  | 'bridge'
+  | 'network';
 
 const ICONS: Record<IconName, LucideIcon> = {
   gear: Settings,
@@ -71,6 +73,7 @@ const ICONS: Record<IconName, LucideIcon> = {
   logout: LogOut,
   mail: Mail,
   bridge: Cable,
+  network: Network,
   'power-off': PowerOff,
 };
 

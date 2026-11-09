@@ -159,6 +159,12 @@ func (a *API) Router() *gin.Engine {
 	admin.PATCH("/deployments/:id/path-rules/:rid", a.updatePathRule)
 	admin.DELETE("/deployments/:id/path-rules/:rid", a.deletePathRule)
 
+	admin.GET("/ip-groups", a.listIPGroups)
+	admin.POST("/ip-groups", a.createIPGroup)
+	admin.GET("/ip-groups/:id", a.getIPGroup)
+	admin.PATCH("/ip-groups/:id", a.updateIPGroup)
+	admin.DELETE("/ip-groups/:id", a.deleteIPGroup)
+
 	admin.GET("/bridges", a.listBridges)
 	admin.POST("/bridges", a.createBridge)
 	admin.GET("/bridges/:id", a.getBridge)

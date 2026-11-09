@@ -63,6 +63,7 @@ const pg: Bridge = {
   targetPort: 5432,
   udpIdleS: 300,
   ipAllowlist: [],
+  ipGroups: [],
   domainId: '',
   subdomain: '',
   host: '',
@@ -88,6 +89,7 @@ describe('bridge form', () => {
       targetPort: 5432,
       udpIdleS: 300,
       ipAllowlist: [],
+      ipGroups: [],
     });
   });
 

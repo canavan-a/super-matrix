@@ -1,6 +1,9 @@
 package registry
 
-import "testing"
+import (
+	"net/netip"
+	"testing"
+)
 
 func TestAllowlist(t *testing.T) {
 	nets, err := ParseAllowlist("10.0.0.0/8, 192.168.1.5\n2001:db8::/32")
@@ -23,6 +26,12 @@ func TestAllowlist(t *testing.T) {
 	}
 	if (&Entry{}).Allowed("8.8.8.8") != true {
 		t.Error("empty allowlist should allow everyone")
+	}
+	if (&Entry{Restricted: true}).Allowed("8.8.8.8") {
+		t.Error("an allow list of empty IP groups should let nobody in")
+	}
+	if (&BridgeEntry{Restricted: true}).Allowed(netip.MustParseAddr("8.8.8.8")) {
+		t.Error("a bridge allow list of empty IP groups should let nobody in")
 	}
 	if _, err := ParseAllowlist("10.0.0.0/33"); err == nil {
 		t.Error("bad prefix accepted")

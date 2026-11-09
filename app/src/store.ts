@@ -14,6 +14,8 @@ import {
   DeploymentInput,
   Domain,
   DomainDns,
+  IPGroup,
+  IPGroupInput,
   PathRule,
   PathRuleInput,
   Relay,
@@ -34,6 +36,7 @@ interface State {
   deployments: Deployment[];
   bridges: Bridge[];
   domains: Domain[];
+  ipGroups: IPGroup[];
   /** relay id → live state; a relay missing here is offline */
   live: Record<string, RelayState>;
   /** public bridge id → "ok" or why the server can't listen on its port */
@@ -59,6 +62,7 @@ const initial: State = {
   deployments: [],
   bridges: [],
   domains: [],
+  ipGroups: [],
   live: {},
   publicLive: {},
   loaded: false,
@@ -212,13 +216,14 @@ let refreshing: Promise<void> | null = null;
 export function refresh(): Promise<void> {
   refreshing ??= (async () => {
     try {
-      const [info, relays, deployments, bridges, domains, status] = await authed((s, t) =>
+      const [info, relays, deployments, bridges, domains, ipGroups, status] = await authed((s, t) =>
         Promise.all([
           api.info(s, t),
           api.relays(s, t),
           api.deployments(s, t),
           api.bridges(s, t),
           api.domains(s, t),
+          api.ipGroups(s, t),
           api.status(s, t),
         ]),
       );
@@ -229,6 +234,7 @@ export function refresh(): Promise<void> {
           deployments,
           bridges,
           domains,
+          ipGroups,
           live: status.relays ?? {},
           publicLive: status.public ?? {},
           loaded: true,
@@ -332,6 +338,17 @@ export async function createDomain(name: string): Promise<Domain> {
 
 export async function deleteDomain(id: string): Promise<void> {
   await authed((s, t) => api.deleteDomain(s, t, id));
+  await refresh().catch(() => {});
+}
+
+export async function saveIPGroup(id: string | null, input: IPGroupInput): Promise<IPGroup> {
+  const g = await authed((s, t) => (id ? api.updateIPGroup(s, t, id, input) : api.createIPGroup(s, t, input)));
+  await refresh().catch(() => {});
+  return g;
+}
+
+export async function deleteIPGroup(id: string): Promise<void> {
+  await authed((s, t) => api.deleteIPGroup(s, t, id));
   await refresh().catch(() => {});
 }
 
