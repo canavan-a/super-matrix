@@ -32,6 +32,9 @@ type Entry struct {
 	Restricted bool
 	// Tokens maps token hashes to their tokens.
 	Tokens map[string]Token
+	// PathRules are this deployment's path-prefix allowlists, longest
+	// PathPrefix first, so the first match is the most specific one.
+	PathRules []PathRuleEntry
 	// OTPEmails is the set of addresses that can get a sign-in code;
 	// "*@domain" stands for everyone at that domain.
 	OTPEmails map[string]bool
@@ -72,6 +75,14 @@ func (e *Entry) AllowsEmail(email string) bool {
 		return false
 	}
 	return e.OTPEmails[email] || e.OTPEmails["*"+email[at:]]
+}
+
+// PathRuleEntry is a path rule as the edge needs it.
+type PathRuleEntry struct {
+	ID         string
+	PathPrefix string
+	// Nets is the parsed extra IP allowlist; empty adds no restriction.
+	Nets []netip.Prefix
 }
 
 // Token is a deployment API token as the edge needs it.
@@ -162,6 +173,10 @@ func (r *Registry) Reload() error {
 	if err := r.db.Find(&bridgeGroups).Error; err != nil {
 		return err
 	}
+	var rules []database.PathRule
+	if err := r.db.Find(&rules).Error; err != nil {
+		return err
+	}
 	s := &snapshot{
 		byHost:  make(map[string]*Entry, len(deps)),
 		byID:    make(map[string]*Entry, len(deps)),
@@ -209,6 +224,17 @@ func (r *Registry) Reload() error {
 			}
 			e.Tokens[t.TokenHash] = tok
 		}
+	}
+	for _, pr := range rules {
+		if e := s.byID[pr.DeploymentID]; e != nil {
+			nets, _ := ParseAllowlist(pr.IPAllowlist)
+			e.PathRules = append(e.PathRules, PathRuleEntry{ID: pr.ID, PathPrefix: pr.PathPrefix, Nets: nets})
+		}
+	}
+	for _, e := range s.byID {
+		sort.Slice(e.PathRules, func(i, j int) bool {
+			return len(e.PathRules[i].PathPrefix) > len(e.PathRules[j].PathPrefix)
+		})
 	}
 	for _, b := range bridges {
 		be := &BridgeEntry{Bridge: b}
@@ -303,6 +329,37 @@ func (e *Entry) Allowed(ip string) bool {
 	a = a.Unmap()
 	for _, p := range e.Nets {
 		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// PathAllowed reports whether ip may reach reqPath on e: the whole-host
+// Allowed check plus, if reqPath falls under a configured path rule (its
+// prefix equals reqPath, or reqPath has prefix+"/" as a literal prefix —
+// so "/secret" matches "/secret" and "/secret/x" but not "/secretly"),
+// that rule's own allowlist too. The most specific (longest) matching
+// prefix wins; no match means no extra restriction.
+func (e *Entry) PathAllowed(reqPath, ip string) bool {
+	var rule *PathRuleEntry
+	for i := range e.PathRules {
+		p := e.PathRules[i].PathPrefix
+		if reqPath == p || p == "/" || strings.HasPrefix(reqPath, p+"/") {
+			rule = &e.PathRules[i]
+			break
+		}
+	}
+	if rule == nil || len(rule.Nets) == 0 {
+		return true
+	}
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	for _, n := range rule.Nets {
+		if n.Contains(a) {
 			return true
 		}
 	}

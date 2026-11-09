@@ -49,24 +49,25 @@ type deploymentDTO struct {
 	OTPEmails        []string `json:"otpEmails"`
 	IPAllowlist      []string `json:"ipAllowlist"`
 	// IPGroups is the IDs of the IP groups the allow list includes.
-	IPGroups          []string   `json:"ipGroups"`
-	SSHCLI            bool       `json:"sshCli"`
-	SSHShell          bool       `json:"sshShell"`
-	SSHUser           string     `json:"sshUser"`
-	SSHHostKey        string     `json:"sshHostKey"`
-	RateLimitEnabled  bool       `json:"rateLimitEnabled"`
-	RateLimitRequests int        `json:"rateLimitRequests"`
-	RateLimitPeriodS  int        `json:"rateLimitPeriodS"`
-	RateLimitBurst    int        `json:"rateLimitBurst"`
-	CertStatus        string     `json:"certStatus"`
-	CertExpiresAt     *time.Time `json:"certExpiresAt"`
-	CertError         string     `json:"certError"`
-	Tokens            []tokenDTO `json:"tokens"`
-	CreatedAt         time.Time  `json:"createdAt"`
-	UpdatedAt         time.Time  `json:"updatedAt"`
+	IPGroups          []string      `json:"ipGroups"`
+	SSHCLI            bool          `json:"sshCli"`
+	SSHShell          bool          `json:"sshShell"`
+	SSHUser           string        `json:"sshUser"`
+	SSHHostKey        string        `json:"sshHostKey"`
+	RateLimitEnabled  bool          `json:"rateLimitEnabled"`
+	RateLimitRequests int           `json:"rateLimitRequests"`
+	RateLimitPeriodS  int           `json:"rateLimitPeriodS"`
+	RateLimitBurst    int           `json:"rateLimitBurst"`
+	CertStatus        string        `json:"certStatus"`
+	CertExpiresAt     *time.Time    `json:"certExpiresAt"`
+	CertError         string        `json:"certError"`
+	Tokens            []tokenDTO    `json:"tokens"`
+	PathRules         []pathRuleDTO `json:"pathRules"`
+	CreatedAt         time.Time     `json:"createdAt"`
+	UpdatedAt         time.Time     `json:"updatedAt"`
 }
 
-func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []database.DeploymentToken, groups []string) deploymentDTO {
+func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []database.DeploymentToken, groups []string, rules []database.PathRule) deploymentDTO {
 	host, domainID := "", ""
 	if d.Host != nil {
 		host = *d.Host
@@ -84,13 +85,16 @@ func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []databa
 		SSHCLI: d.SSHCLI, SSHShell: d.SSHShell, SSHUser: d.SSHUser, SSHHostKey: d.SSHHostKey,
 		RateLimitEnabled: d.RateLimitEnabled, RateLimitRequests: d.RateLimitRequests,
 		RateLimitPeriodS: d.RateLimitPeriodS, RateLimitBurst: d.RateLimitBurst,
-		CertError: d.CertError, Tokens: []tokenDTO{}, IPGroups: groups, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
+		CertError: d.CertError, Tokens: []tokenDTO{}, IPGroups: groups, PathRules: []pathRuleDTO{}, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
 	}
 	if out.IPGroups == nil {
 		out.IPGroups = []string{}
 	}
 	for _, t := range toks {
 		out.Tokens = append(out.Tokens, tokenDTO{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt, ExpiresAt: t.ExpiresAt})
+	}
+	for _, r := range rules {
+		out.PathRules = append(out.PathRules, pathRuleOut(r))
 	}
 	return out
 }
@@ -140,9 +144,10 @@ func (a *API) listDeployments(c *gin.Context) {
 	}
 	toks := a.tokensOf(ids...)
 	groups := a.deploymentIPGroups(ids...)
+	rules := a.pathRulesOf(ids...)
 	out := make([]deploymentDTO, 0, len(ds))
 	for _, d := range ds {
-		out = append(out, a.deploymentOut(c, d, toks[d.ID], groups[d.ID]))
+		out = append(out, a.deploymentOut(c, d, toks[d.ID], groups[d.ID], rules[d.ID]))
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -153,7 +158,7 @@ func (a *API) deploymentIPGroups(ids ...string) map[string][]string {
 
 // deploymentFull is d as the API returns it, with its tokens and groups.
 func (a *API) deploymentFull(c *gin.Context, d database.Deployment) deploymentDTO {
-	return a.deploymentOut(c, d, a.tokensOf(d.ID)[d.ID], a.deploymentIPGroups(d.ID)[d.ID])
+	return a.deploymentOut(c, d, a.tokensOf(d.ID)[d.ID], a.deploymentIPGroups(d.ID)[d.ID], a.pathRulesOf(d.ID)[d.ID])
 }
 
 func (a *API) getDeployment(c *gin.Context) {

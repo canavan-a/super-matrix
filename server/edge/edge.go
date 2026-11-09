@@ -126,6 +126,10 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		message(w, http.StatusForbidden, "Not allowed", "Your address ("+ip+") isn't on this deployment's allow list.")
 		return
 	}
+	if !ent.PathAllowed(r.URL.Path, ip) {
+		message(w, http.StatusForbidden, "Not allowed", "Your address ("+ip+") isn't on the allow list for "+r.URL.Path+".")
+		return
+	}
 	if ok, retry := ent.RateLimitAllow(ip, e.now()); !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry/time.Second)))
 		message(w, http.StatusTooManyRequests, "Too many requests", "You've hit this deployment's rate limit. Slow down and try again shortly.")

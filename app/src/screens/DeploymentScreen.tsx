@@ -13,6 +13,7 @@ import {
   Deployment,
   DeploymentInput,
   DeploymentToken,
+  PathRule,
   Protocol,
 } from '../api';
 import {IPGroupPicker} from '../components/IPGroupPicker';
@@ -34,11 +35,14 @@ import {
 import {platformConfirm} from '../platformConfirm';
 import {Route} from '../routes';
 import {
+  createPathRule,
   createToken,
   deleteDeployment,
+  deletePathRule,
   deleteToken,
   deploymentHealth,
   saveDeployment,
+  updatePathRule,
   useStore,
 } from '../store';
 import {Theme, useTheme} from '../theme';
@@ -647,6 +651,17 @@ export function DeploymentScreen({
       </Hint>
       <IPGroupPicker value={form.ipGroups} onChange={v => set({ipGroups: v})} />
 
+      <Label spaced>Path rules</Label>
+      <Hint>
+        Layer a stricter allow list onto one path (and everything under it),
+        on top of the allow list above. A path with no rule just uses it.
+      </Hint>
+      {existing ? (
+        <PathRules d={existing} />
+      ) : (
+        <Hint>Save first, then add path rules here.</Hint>
+      )}
+
       <ToggleRow
         label="Rate limiting"
         hint="Caps requests from a single client address to this deployment, at the edge."
@@ -950,6 +965,149 @@ function Tokens({d, tokenOnly}: {d: Deployment; tokenOnly: boolean}) {
   );
 }
 
+function splitList(s: string): string[] {
+  return s
+    .split(/[\n,]/)
+    .map(x => x.trim())
+    .filter(Boolean);
+}
+
+type RuleEdit = {prefix: string; allow: string};
+
+function PathRules({d}: {d: Deployment}) {
+  const theme = useTheme();
+  const styles = makeStyles(theme);
+  const [prefix, setPrefix] = useState('');
+  const [allow, setAllow] = useState('');
+  const [edits, setEdits] = useState<Record<string, RuleEdit>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const edited = (r: PathRule): RuleEdit =>
+    edits[r.id] ?? {prefix: r.pathPrefix, allow: r.ipAllowlist.join('\n')};
+  const setEdit = (r: PathRule, patch: Partial<RuleEdit>) =>
+    setEdits(e => ({...e, [r.id]: {...edited(r), ...patch}}));
+
+  const add = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await createPathRule(d.id, {
+        pathPrefix: prefix.trim(),
+        ipAllowlist: splitList(allow),
+      });
+      setPrefix('');
+      setAllow('');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const save = async (r: PathRule) => {
+    const v = edited(r);
+    setBusy(true);
+    setError(null);
+    try {
+      await updatePathRule(d.id, r.id, {
+        pathPrefix: v.prefix.trim(),
+        ipAllowlist: splitList(v.allow),
+      });
+      setEdits(e => {
+        const n = {...e};
+        delete n[r.id];
+        return n;
+      });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = (r: PathRule) =>
+    platformConfirm(
+      `Remove the rule for ${r.pathPrefix}?`,
+      'Requests under this path go back to just the allow list above.',
+      'Remove',
+      () =>
+        deletePathRule(d.id, r.id).catch(e => setError((e as Error).message)),
+    );
+
+  return (
+    <View style={styles.tokens}>
+      {d.pathRules.length === 0 && (
+        <Hint>No path rules yet: every path uses the allow list above.</Hint>
+      )}
+      {d.pathRules.map(r => {
+        const v = edited(r);
+        return (
+          <View key={r.id} style={styles.ruleRow}>
+            <View style={styles.subRow}>
+              <Input
+                style={[styles.flex, styles.mono]}
+                value={v.prefix}
+                onChangeText={t => setEdit(r, {prefix: t})}
+                accessibilityLabel={`Path prefix (was ${r.pathPrefix})`}
+              />
+              <Pressable
+                onPress={() => remove(r)}
+                accessibilityLabel={`Remove ${r.pathPrefix}`}
+                hitSlop={8}>
+                <Icon name="trash" size={18} color={theme.danger} />
+              </Pressable>
+            </View>
+            <Input
+              value={v.allow}
+              onChangeText={t => setEdit(r, {allow: t})}
+              multiline
+              mono
+              placeholder="Anyone (empty)"
+              style={styles.multiline}
+              accessibilityLabel={`IP allow list for ${r.pathPrefix}`}
+            />
+            <Button
+              label="Save"
+              kind="secondary"
+              onPress={() => save(r)}
+              busy={busy}
+              style={styles.spacedSmall}
+            />
+          </View>
+        );
+      })}
+      <View style={styles.ruleRow}>
+        <Input
+          value={prefix}
+          onChangeText={setPrefix}
+          mono
+          placeholder="/secret"
+          accessibilityLabel="New path prefix"
+        />
+        <Input
+          value={allow}
+          onChangeText={setAllow}
+          multiline
+          mono
+          placeholder={'Anyone (empty)\n203.0.113.7\n10.0.0.0/8'}
+          style={[styles.multiline, styles.spacedSmall]}
+          accessibilityLabel="New path rule IP allow list"
+        />
+        <Button
+          label="Add rule"
+          kind="secondary"
+          onPress={add}
+          busy={busy}
+          disabled={!prefix.trim()}
+          style={styles.spacedSmall}
+        />
+      </View>
+      {error ? <Hint error>{error}</Hint> : null}
+    </View>
+  );
+}
+
 function makeStyles(theme: Theme) {
   return StyleSheet.create({
     fill: {flex: 1, backgroundColor: theme.bg},
@@ -1014,5 +1172,10 @@ function makeStyles(theme: Theme) {
     },
     tokenName: {fontSize: 14, fontWeight: '600', color: theme.text},
     tokenMeta: {fontSize: 11, color: theme.textMuted, marginTop: 2},
+    ruleRow: {
+      paddingVertical: 10,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+    },
   });
 }
