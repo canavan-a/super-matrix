@@ -1,6 +1,7 @@
 // Package registry keeps an in-memory snapshot of every deployment, built
 // from SQLite, so the edge never touches the database on the request path.
-// Anything that changes deployments or their tokens calls Reload.
+// Anything that changes deployments, their tokens, bridges or IP groups
+// calls Reload.
 package registry
 
 import (
@@ -23,8 +24,12 @@ import (
 type Entry struct {
 	database.Deployment
 	Host string
-	// Nets is the parsed IP allowlist; empty allows everyone.
+	// Nets is the parsed IP allowlist, with its IP groups' entries folded
+	// in; empty allows everyone unless Restricted.
 	Nets []netip.Prefix
+	// Restricted is set when the allow list includes an IP group, so Nets
+	// limits who gets in even if it ends up empty.
+	Restricted bool
 	// Tokens maps token hashes to their tokens.
 	Tokens map[string]Token
 	// OTPEmails is the set of addresses that can get a sign-in code;
@@ -88,13 +93,16 @@ type snapshot struct {
 // BridgeEntry is a bridge as the server needs it.
 type BridgeEntry struct {
 	database.Bridge
-	// Nets is the parsed IP allowlist (public bridges); empty allows everyone.
+	// Nets is the parsed IP allowlist (public bridges), with its IP groups'
+	// entries folded in; empty allows everyone unless Restricted.
 	Nets []netip.Prefix
+	// Restricted is set when the allow list includes an IP group.
+	Restricted bool
 }
 
 // Allowed reports whether ip may use a public bridge.
 func (b *BridgeEntry) Allowed(ip netip.Addr) bool {
-	if len(b.Nets) == 0 {
+	if len(b.Nets) == 0 && !b.Restricted {
 		return true
 	}
 	ip = ip.Unmap()
@@ -138,6 +146,22 @@ func (r *Registry) Reload() error {
 	if err := r.db.Select("id", "deployment_id", "token_hash", "expires_at").Find(&toks).Error; err != nil {
 		return err
 	}
+	var groups []database.IPGroup
+	if err := r.db.Find(&groups).Error; err != nil {
+		return err
+	}
+	groupNets := make(map[string][]netip.Prefix, len(groups))
+	for _, g := range groups {
+		groupNets[g.ID], _ = ParseAllowlist(g.Entries)
+	}
+	var depGroups []database.DeploymentIPGroup
+	if err := r.db.Find(&depGroups).Error; err != nil {
+		return err
+	}
+	var bridgeGroups []database.BridgeIPGroup
+	if err := r.db.Find(&bridgeGroups).Error; err != nil {
+		return err
+	}
 	s := &snapshot{
 		byHost:  make(map[string]*Entry, len(deps)),
 		byID:    make(map[string]*Entry, len(deps)),
@@ -171,6 +195,12 @@ func (r *Registry) Reload() error {
 			})
 		}
 	}
+	for _, g := range depGroups {
+		if e := s.byID[g.DeploymentID]; e != nil {
+			e.Nets = append(e.Nets, groupNets[g.IPGroupID]...)
+			e.Restricted = true
+		}
+	}
 	for _, t := range toks {
 		if e := s.byID[t.DeploymentID]; e != nil {
 			tok := Token{ID: t.ID}
@@ -192,6 +222,12 @@ func (r *Registry) Reload() error {
 		})
 		if b.FromRelayID != nil {
 			s.listens[*b.FromRelayID] = append(s.listens[*b.FromRelayID], be.Listener())
+		}
+	}
+	for _, g := range bridgeGroups {
+		if be := s.bridges[g.BridgeID]; be != nil {
+			be.Nets = append(be.Nets, groupNets[g.IPGroupID]...)
+			be.Restricted = true
 		}
 	}
 	r.snap.Store(s)
@@ -257,7 +293,7 @@ func ParseAllowlist(s string) ([]netip.Prefix, error) {
 
 // Allowed reports whether ip may reach e.
 func (e *Entry) Allowed(ip string) bool {
-	if len(e.Nets) == 0 {
+	if len(e.Nets) == 0 && !e.Restricted {
 		return true
 	}
 	a, err := netip.ParseAddr(ip)

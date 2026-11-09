@@ -145,6 +145,8 @@ export interface Deployment {
   /** who can get an email code (otp mode) */
   otpEmails: string[];
   ipAllowlist: string[];
+  /** IDs of the IP groups the allow list includes */
+  ipGroups: string[];
   /** ssh only: the CLI proxy and the browser shell, the username the shell suggests */
   sshCli: boolean;
   sshShell: boolean;
@@ -186,6 +188,8 @@ export interface DeploymentInput {
   basicPassword?: string;
   otpEmails?: string[];
   ipAllowlist?: string[];
+  /** replaces the IP groups the allow list includes, by ID */
+  ipGroups?: string[];
   sshCli?: boolean;
   sshShell?: boolean;
   sshUser?: string;
@@ -246,6 +250,8 @@ export interface Bridge {
   udpIdleS: number;
   /** public bridges only */
   ipAllowlist: string[];
+  /** public bridges only: IDs of the IP groups the allow list includes */
+  ipGroups: string[];
   /** public bridges: the domain and label of its DNS name, and the name itself ("" for none) */
   domainId: string;
   subdomain: string;
@@ -269,9 +275,28 @@ export interface BridgeInput {
   targetPort?: number;
   udpIdleS?: number;
   ipAllowlist?: string[];
+  ipGroups?: string[];
   /** public bridges: "" for no DNS name */
   domainId?: string;
   subdomain?: string;
+}
+
+/** A named set of addresses and CIDR ranges that allow lists include by reference. */
+export interface IPGroup {
+  id: string;
+  name: string;
+  /** normalized CIDRs (a bare address comes back as /32 or /128) */
+  entries: string[];
+  /** how many deployments and public bridges include it */
+  deployments: number;
+  bridges: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IPGroupInput {
+  name?: string;
+  entries?: string[];
 }
 
 /** /v1/status: each online relay's live state, and each public bridge's listen status on the server. */
@@ -324,6 +349,12 @@ export const api = {
     }),
   deleteToken: (server: string, token: string, id: string, tid: string) =>
     request<void>(server, 'DELETE', `/v1/deployments/${id}/tokens/${tid}`, token),
+
+  ipGroups: (server: string, token: string) => request<IPGroup[]>(server, 'GET', '/v1/ip-groups', token),
+  createIPGroup: (server: string, token: string, g: IPGroupInput) => request<IPGroup>(server, 'POST', '/v1/ip-groups', token, g),
+  updateIPGroup: (server: string, token: string, id: string, g: IPGroupInput) =>
+    request<IPGroup>(server, 'PATCH', `/v1/ip-groups/${id}`, token, g),
+  deleteIPGroup: (server: string, token: string, id: string) => request<void>(server, 'DELETE', `/v1/ip-groups/${id}`, token),
 
   bridges: (server: string, token: string) => request<Bridge[]>(server, 'GET', '/v1/bridges', token),
   createBridge: (server: string, token: string, b: BridgeInput) => request<Bridge>(server, 'POST', '/v1/bridges', token, b),

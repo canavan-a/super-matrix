@@ -15,6 +15,7 @@ import {
   DeploymentToken,
   Protocol,
 } from '../api';
+import {IPGroupPicker} from '../components/IPGroupPicker';
 import {Icon} from '../components/Icon';
 import {transportBadge, viaLine} from '../link';
 import {Notice} from '../components/Notice';
@@ -69,6 +70,8 @@ export interface DeploymentForm {
   otpEmails: string;
   /** one CIDR or address per line */
   ipAllowlist: string;
+  /** IDs of the IP groups the allow list includes */
+  ipGroups: string[];
   /** ssh: the supermatrix CLI, the browser shell, and the username it suggests */
   sshCli: boolean;
   sshShell: boolean;
@@ -104,6 +107,7 @@ export function formFrom(
     basicPassword: '',
     otpEmails: (d?.otpEmails ?? []).join('\n'),
     ipAllowlist: (d?.ipAllowlist ?? []).join('\n'),
+    ipGroups: d?.ipGroups ?? [],
     sshCli: d?.sshCli ?? true,
     sshShell: d?.sshShell ?? true,
     sshUser: d?.sshUser ?? '',
@@ -139,6 +143,7 @@ export function formToInput(f: DeploymentForm): DeploymentInput {
       .split(/[\n,]/)
       .map(s => s.trim())
       .filter(Boolean),
+    ipGroups: f.ipGroups,
     sshCli: f.sshCli,
     sshShell: f.sshShell,
     sshUser: f.sshUser.trim(),
@@ -638,8 +643,9 @@ export function DeploymentScreen({
       />
       <Hint>
         One address or CIDR range per line, checked before any sign-in. Empty
-        lets every address try.
+        (and no IP groups) lets every address try.
       </Hint>
+      <IPGroupPicker value={form.ipGroups} onChange={v => set({ipGroups: v})} />
 
       <ToggleRow
         label="Rate limiting"

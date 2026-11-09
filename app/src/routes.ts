@@ -8,4 +8,5 @@ export type Route =
   | {name: 'bridge'; id: string | null}
   | {name: 'relays'}
   | {name: 'domains'}
+  | {name: 'ipGroups'}
   | {name: 'settings'};
