@@ -76,6 +76,7 @@ describe('deployment form', () => {
       sessionTtlS: 86400,
       basicUser: '',
       otpEmails: [],
+      emailGroups: [],
       ipAllowlist: ['10.0.0.0/8', '203.0.113.7/32'],
       ipGroups: ['g1'],
       sshCli: true,
@@ -88,6 +89,12 @@ describe('deployment form', () => {
     });
     expect('loginPassword' in input).toBe(false);
     expect('basicPassword' in input).toBe(false);
+  });
+
+  it('keeps email groups, and treats a server without them as none', () => {
+    expect(formToInput(formFrom({...existing, authMode: 'otp', emailGroups: ['e1', 'e2']})).emailGroups).toEqual(['e1', 'e2']);
+    // existing comes from a server that doesn't send emailGroups.
+    expect(formFrom(existing).emailGroups).toEqual([]);
   });
 
   it('sends a new password, or "" to remove one', () => {

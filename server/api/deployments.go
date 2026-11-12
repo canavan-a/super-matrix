@@ -14,7 +14,6 @@ import (
 	"gorm.io/gorm"
 
 	"main/database"
-	"main/edge"
 	"main/registry"
 )
 
@@ -47,7 +46,9 @@ type deploymentDTO struct {
 	BasicUser        string   `json:"basicUser"`
 	HasBasicPassword bool     `json:"hasBasicPassword"`
 	OTPEmails        []string `json:"otpEmails"`
-	IPAllowlist      []string `json:"ipAllowlist"`
+	// EmailGroups is the IDs of the email groups the sign-in list includes.
+	EmailGroups []string `json:"emailGroups"`
+	IPAllowlist []string `json:"ipAllowlist"`
 	// IPGroups is the IDs of the IP groups the allow list includes.
 	IPGroups          []string      `json:"ipGroups"`
 	SSHCLI            bool          `json:"sshCli"`
@@ -67,7 +68,7 @@ type deploymentDTO struct {
 	UpdatedAt         time.Time     `json:"updatedAt"`
 }
 
-func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []database.DeploymentToken, groups []string, rules []database.PathRule) deploymentDTO {
+func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []database.DeploymentToken, groups, emailGroups []string, rules []database.PathRule) deploymentDTO {
 	host, domainID := "", ""
 	if d.Host != nil {
 		host = *d.Host
@@ -89,6 +90,10 @@ func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []databa
 	}
 	if out.IPGroups == nil {
 		out.IPGroups = []string{}
+	}
+	out.EmailGroups = emailGroups
+	if out.EmailGroups == nil {
+		out.EmailGroups = []string{}
 	}
 	for _, t := range toks {
 		out.Tokens = append(out.Tokens, tokenDTO{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt, ExpiresAt: t.ExpiresAt})
@@ -144,10 +149,11 @@ func (a *API) listDeployments(c *gin.Context) {
 	}
 	toks := a.tokensOf(ids...)
 	groups := a.deploymentIPGroups(ids...)
+	emailGroups := a.deploymentEmailGroups(ids...)
 	rules := a.pathRulesOf(ids...)
 	out := make([]deploymentDTO, 0, len(ds))
 	for _, d := range ds {
-		out = append(out, a.deploymentOut(c, d, toks[d.ID], groups[d.ID], rules[d.ID]))
+		out = append(out, a.deploymentOut(c, d, toks[d.ID], groups[d.ID], emailGroups[d.ID], rules[d.ID]))
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -158,7 +164,7 @@ func (a *API) deploymentIPGroups(ids ...string) map[string][]string {
 
 // deploymentFull is d as the API returns it, with its tokens and groups.
 func (a *API) deploymentFull(c *gin.Context, d database.Deployment) deploymentDTO {
-	return a.deploymentOut(c, d, a.tokensOf(d.ID)[d.ID], a.deploymentIPGroups(d.ID)[d.ID], a.pathRulesOf(d.ID)[d.ID])
+	return a.deploymentOut(c, d, a.tokensOf(d.ID)[d.ID], a.deploymentIPGroups(d.ID)[d.ID], a.deploymentEmailGroups(d.ID)[d.ID], a.pathRulesOf(d.ID)[d.ID])
 }
 
 func (a *API) getDeployment(c *gin.Context) {
@@ -190,7 +196,9 @@ type deploymentInput struct {
 	BasicUser      *string   `json:"basicUser"`
 	BasicPassword  *string   `json:"basicPassword"`
 	OTPEmails      *[]string `json:"otpEmails"`
-	IPAllowlist    *[]string `json:"ipAllowlist"`
+	// EmailGroups replaces the email groups the sign-in list includes, by ID.
+	EmailGroups *[]string `json:"emailGroups"`
+	IPAllowlist *[]string `json:"ipAllowlist"`
 	// IPGroups replaces the IP groups the allow list includes, by ID.
 	IPGroups *[]string `json:"ipGroups"`
 	SSHCLI   *bool     `json:"sshCli"`
@@ -231,7 +239,9 @@ func hashPassword(pw string) (string, error) {
 }
 
 // apply copies the set fields of in onto d and checks the result.
-func (a *API) apply(d *database.Deployment, in deploymentInput) error {
+// emailGroups is how many email groups d's sign-in list will include once
+// written, which can stand in for addresses on its own list.
+func (a *API) apply(d *database.Deployment, in deploymentInput, emailGroups int) error {
 	if in.RelayID != nil {
 		d.RelayID = *in.RelayID
 	}
@@ -314,29 +324,9 @@ func (a *API) apply(d *database.Deployment, in deploymentInput) error {
 		}
 	}
 	if in.OTPEmails != nil {
-		seen := map[string]bool{}
-		var list []string
-		for _, raw := range *in.OTPEmails {
-			if strings.TrimSpace(raw) == "" {
-				continue
-			}
-			m := edge.NormalizeEmail(raw)
-			// "*" only works as the whole name part: *@domain.com.
-			if name, domain, _ := strings.Cut(m, "@"); name != "*" && strings.Contains(name, "*") || strings.Contains(domain, "*") {
-				m = ""
-			}
-			if m == "" {
-				return inputError("email list: " + strings.TrimSpace(raw) + " isn't an email address")
-			}
-			if !seen[m] {
-				seen[m] = true
-				list = append(list, m)
-			}
+		if d.OTPEmails, err = normalizeEmails(*in.OTPEmails, "email list"); err != nil {
+			return err
 		}
-		if len(list) > 1000 {
-			return inputError("email list: at most 1000 addresses")
-		}
-		d.OTPEmails = strings.Join(list, "\n")
 	}
 	if in.RateLimitEnabled != nil {
 		d.RateLimitEnabled = *in.RateLimitEnabled
@@ -404,8 +394,8 @@ func (a *API) apply(d *database.Deployment, in deploymentInput) error {
 	switch d.AuthMode {
 	case database.AuthNone, database.AuthToken:
 	case database.AuthOTP:
-		if d.OTPEmails == "" {
-			return inputError("email codes need at least one address on the list")
+		if d.OTPEmails == "" && emailGroups == 0 {
+			return inputError("email codes need at least one address or email group on the list")
 		}
 	case database.AuthLogin:
 		if d.LoginPassHash == "" && !d.AllowRootLogin {
@@ -467,7 +457,12 @@ func (a *API) createDeployment(c *gin.Context) {
 	if !a.cfg.TLSOn() {
 		d.CertStatus = database.CertOff
 	}
-	if err := a.apply(&d, in); err != nil {
+	emailGroups, err := a.cleanEmailGroupIDs(in.EmailGroups)
+	if err != nil {
+		a.inputFail(c, err)
+		return
+	}
+	if err := a.apply(&d, in, len(emailGroups)); err != nil {
 		a.inputFail(c, err)
 		return
 	}
@@ -481,6 +476,9 @@ func (a *API) createDeployment(c *gin.Context) {
 	}
 	err = a.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&d).Error; err != nil {
+			return err
+		}
+		if err := setDeploymentEmailGroups(tx, d.ID, emailGroups); err != nil {
 			return err
 		}
 		return setDeploymentIPGroups(tx, d.ID, groups)
@@ -506,7 +504,17 @@ func (a *API) updateDeployment(c *gin.Context) {
 	if !ownRelay(c, &in) {
 		return
 	}
-	if err := a.apply(d, in); err != nil {
+	emailGroups, err := a.cleanEmailGroupIDs(in.EmailGroups)
+	if err != nil {
+		a.inputFail(c, err)
+		return
+	}
+	nEmailGroups, err := a.emailGroupCount(d.ID, emailGroups)
+	if err != nil {
+		abort(c, http.StatusInternalServerError, "server error")
+		return
+	}
+	if err := a.apply(d, in, nEmailGroups); err != nil {
 		a.inputFail(c, err)
 		return
 	}
@@ -522,6 +530,11 @@ func (a *API) updateDeployment(c *gin.Context) {
 	err = a.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(d).Error; err != nil {
 			return err
+		}
+		if emailGroups != nil {
+			if err := setDeploymentEmailGroups(tx, d.ID, emailGroups); err != nil {
+				return err
+			}
 		}
 		if groups == nil {
 			return nil
