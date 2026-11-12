@@ -13,8 +13,11 @@ import (
 )
 
 type Relay struct {
-	ID         string `gorm:"primaryKey"`
-	Name       string
+	ID   string `gorm:"primaryKey"`
+	Name string
+	// Slug is the relay's friendly ID (see ValidSlug), unique among relays;
+	// config files name the relay by it.
+	Slug       string
 	TokenHash  string
 	CreatedAt  time.Time
 	LastSeenAt *time.Time
@@ -53,8 +56,11 @@ const (
 // ToRelayID's network. It listens on FromRelayID's machine, or on the
 // server itself (a public bridge) when FromRelayID is nil.
 type Bridge struct {
-	ID          string `gorm:"primaryKey"`
-	Name        string
+	ID   string `gorm:"primaryKey"`
+	Name string
+	// Slug is the bridge's friendly ID (see ValidSlug), unique among
+	// bridges.
+	Slug        string
 	Protocol    string // tcp | udp
 	Enabled     bool
 	FromRelayID *string

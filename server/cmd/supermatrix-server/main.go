@@ -37,6 +37,10 @@ func main() {
 	if err := database.Seed(db, cfg.BaseDomain); err != nil {
 		log.Fatalf("seed domains: %v", err)
 	}
+	// Only the server fills in missing slugs, so admin CLI reads stay reads.
+	if err := database.BackfillSlugs(db); err != nil {
+		log.Fatalf("%v", err)
+	}
 	reg, err := registry.New(db, cfg)
 	if err != nil {
 		log.Fatalf("load deployments: %v", err)

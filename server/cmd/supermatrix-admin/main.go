@@ -77,7 +77,7 @@ func main() {
 			fmt.Fprintln(w, d.Label())
 		}
 		fmt.Fprintln(w)
-		fmt.Fprintln(w, "RELAY\tLAST SEEN\tFROM\tTRANSPORT\tVERSION")
+		fmt.Fprintln(w, "RELAY\tSLUG\tLAST SEEN\tFROM\tTRANSPORT\tVERSION")
 		for _, r := range relays {
 			seen := "never"
 			if r.LastSeenAt != nil {
@@ -87,7 +87,7 @@ func main() {
 			if tr == "websocket" && r.Fallback != "" {
 				tr += " (not QUIC: " + r.Fallback + ")"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.Name, seen, r.LastIP, tr, r.Version)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.Name, r.Slug, seen, r.LastIP, tr, r.Version)
 		}
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "HOST\tRELAY\tTARGET\tAUTH\tCERT\tENABLED")

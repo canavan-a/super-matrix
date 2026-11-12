@@ -21,6 +21,7 @@ import (
 type bridgeDTO struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
+	Slug     string `json:"slug"`
 	Protocol string `json:"protocol"`
 	Enabled  bool   `json:"enabled"`
 	// Public: the bridge listens on the server, at PublicAddress.
@@ -61,7 +62,7 @@ func (a *API) bridgeOut(b database.Bridge, groups []string) bridgeDTO {
 		groups = []string{}
 	}
 	out := bridgeDTO{
-		ID: b.ID, Name: b.Name, Protocol: b.Protocol, Enabled: b.Enabled, Public: b.Public(),
+		ID: b.ID, Name: b.Name, Slug: b.Slug, Protocol: b.Protocol, Enabled: b.Enabled, Public: b.Public(),
 		ListenHost: b.ListenHost, ListenPort: b.ListenPort, ToRelayID: b.ToRelayID,
 		TargetHost: b.TargetHost, TargetPort: b.TargetPort, UDPIdleS: b.UDPIdleS,
 		IPAllowlist: splitAllowlist(b.IPAllowlist), IPGroups: groups, CreatedAt: b.CreatedAt, UpdatedAt: b.UpdatedAt,
@@ -126,7 +127,10 @@ func (a *API) getBridge(c *gin.Context) {
 // bridgeInput is the body of create (missing fields take defaults) and
 // update (missing fields stay as they are).
 type bridgeInput struct {
-	Name     *string `json:"name"`
+	Name *string `json:"name"`
+	// Slug is the bridge's friendly ID; on create one is made from the
+	// name when it's missing.
+	Slug     *string `json:"slug"`
 	Protocol *string `json:"protocol"`
 	Enabled  *bool   `json:"enabled"`
 	// Public makes the server the listening side; FromRelayID is then
@@ -330,8 +334,15 @@ func (a *API) bridgeFail(c *gin.Context, err error) {
 
 // bridgeWriteFail answers a failed insert or save. applyBridge already
 // checked the port is free, but a concurrent request can take it between
-// that check and the write; the unique index then catches it.
-func bridgeWriteFail(c *gin.Context, b *database.Bridge, err error) {
+// that check and the write; the unique index then catches it. The slug is
+// picked in the write's transaction, so its errors land here too.
+func (a *API) bridgeWriteFail(c *gin.Context, b *database.Bridge, err error) {
+	var ce conflictError
+	var ie inputError
+	if errors.As(err, &ce) || errors.As(err, &ie) || a.slugClash(err, "bridges", b.Slug, b.ID) {
+		a.writeFail(c, err, "bridges", b.Slug, b.ID)
+		return
+	}
 	if errors.Is(err, gorm.ErrDuplicatedKey) {
 		if b.Public() {
 			abort(c, http.StatusConflict, fmt.Sprintf("another public bridge already uses %s port %d", b.Protocol, b.ListenPort))
@@ -376,13 +387,18 @@ func (a *API) createBridge(c *gin.Context) {
 		return
 	}
 	err = a.db.Transaction(func(tx *gorm.DB) error {
+		s, err := slugFor(tx, "bridges", in.Slug, b.Name, "bridge", b.ID, "")
+		if err != nil {
+			return err
+		}
+		b.Slug = s
 		if err := tx.Create(&b).Error; err != nil {
 			return err
 		}
 		return setBridgeIPGroups(tx, b.ID, groups)
 	})
 	if err != nil {
-		bridgeWriteFail(c, &b, err)
+		a.bridgeWriteFail(c, &b, err)
 		return
 	}
 	a.changed()
@@ -411,6 +427,11 @@ func (a *API) updateBridge(c *gin.Context) {
 		return
 	}
 	err = a.db.Transaction(func(tx *gorm.DB) error {
+		s, err := slugFor(tx, "bridges", in.Slug, b.Name, "bridge", b.ID, b.Slug)
+		if err != nil {
+			return err
+		}
+		b.Slug = s
 		if err := tx.Select("*").Save(b).Error; err != nil {
 			return err
 		}
@@ -420,7 +441,7 @@ func (a *API) updateBridge(c *gin.Context) {
 		return setBridgeIPGroups(tx, b.ID, groups)
 	})
 	if err != nil {
-		bridgeWriteFail(c, b, err)
+		a.bridgeWriteFail(c, b, err)
 		return
 	}
 	a.changed()

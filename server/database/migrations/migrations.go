@@ -39,14 +39,29 @@ func Run(db *sql.DB) error {
 // UpTo applies migrations up to and including version (tests use it to
 // build a database as an older release left it).
 func UpTo(db *sql.DB, version int64) error {
-	migrationsFS, err := fs.Sub(migrationFiles, "sql")
-	if err != nil {
-		return err
-	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrationsFS)
+	provider, err := newProvider(db)
 	if err != nil {
 		return err
 	}
 	_, err = provider.UpTo(context.Background(), version)
 	return err
+}
+
+// DownTo rolls migrations back until version is the newest applied (tests
+// use it to check every Down undoes its Up).
+func DownTo(db *sql.DB, version int64) error {
+	provider, err := newProvider(db)
+	if err != nil {
+		return err
+	}
+	_, err = provider.DownTo(context.Background(), version)
+	return err
+}
+
+func newProvider(db *sql.DB) (*goose.Provider, error) {
+	migrationsFS, err := fs.Sub(migrationFiles, "sql")
+	if err != nil {
+		return nil, err
+	}
+	return goose.NewProvider(goose.DialectSQLite3, db, migrationsFS)
 }

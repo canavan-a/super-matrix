@@ -42,6 +42,8 @@ export const PUBLIC = 'public';
 
 export interface BridgeForm {
   name: string;
+  /** "" keeps the current slug, or on create has one made from the name */
+  slug: string;
   protocol: BridgeProtocol;
   enabled: boolean;
   /** a relay id, or PUBLIC */
@@ -64,6 +66,7 @@ export interface BridgeForm {
 export function bridgeFormFrom(b: Bridge | null): BridgeForm {
   return {
     name: b?.name ?? '',
+    slug: b?.slug ?? '',
     protocol: b?.protocol ?? 'tcp',
     enabled: b?.enabled ?? true,
     from: b ? (b.public ? PUBLIC : b.fromRelayId) : '',
@@ -84,6 +87,7 @@ export function bridgeFormToInput(f: BridgeForm): BridgeInput {
   const pub = f.from === PUBLIC;
   return {
     name: f.name.trim(),
+    ...(f.slug.trim() ? {slug: f.slug.trim().toLowerCase()} : {}),
     protocol: f.protocol,
     enabled: f.enabled,
     public: pub,
@@ -200,8 +204,12 @@ export function BridgeScreen({
       ? `${form.subdomain.trim().toLowerCase() || 'name'}.${domain.name}`
       : domain.name
     : info?.adminHost ?? 'this server';
+  // A bridge that has a slug keeps one: clearing the field can't save (the
+  // form would leave it out and quietly keep the old one).
+  const slugCleared = !!existing?.slug && form.slug.trim() === '';
   const ready =
     form.name.trim() !== '' &&
+    !slugCleared &&
     form.from !== '' &&
     form.toRelayId !== '' &&
     form.from !== form.toRelayId &&
@@ -239,6 +247,20 @@ export function BridgeScreen({
         placeholder="postgres"
         accessibilityLabel="Name"
       />
+      <Label spaced>Slug</Label>
+      <Input
+        value={form.slug}
+        onChangeText={v => set({slug: v.toLowerCase()})}
+        placeholder={existing ? '' : 'made from the name'}
+        autoCapitalize="none"
+        autoCorrect={false}
+        accessibilityLabel="Slug"
+      />
+      <Hint>
+        {slugCleared
+          ? "A bridge's slug can be changed but not removed."
+          : 'The name config files use for this bridge: lowercase letters, digits and dashes.'}
+      </Hint>
       <Label spaced>Protocol</Label>
       <Chips<BridgeProtocol>
         options={[

@@ -71,6 +71,8 @@ export type Transport = 'quic' | 'websocket';
 export interface Relay {
   id: string;
   name: string;
+  /** friendly ID config files name it by; missing from servers before slugs */
+  slug?: string;
   createdAt: string;
   lastSeenAt: string | null;
   lastIp: string;
@@ -250,6 +252,8 @@ export type BridgeProtocol = 'tcp' | 'udp';
 export interface Bridge {
   id: string;
   name: string;
+  /** friendly ID config files name it by; missing from servers before slugs */
+  slug?: string;
   protocol: BridgeProtocol;
   enabled: boolean;
   public: boolean;
@@ -280,6 +284,8 @@ export interface Bridge {
 
 export interface BridgeInput {
   name?: string;
+  /** left out to keep the current one (or, on create, have one made from the name) */
+  slug?: string;
   protocol?: BridgeProtocol;
   enabled?: boolean;
   public?: boolean;
@@ -343,6 +349,8 @@ export const api = {
     request<{relay: Relay; token: string}>(server, 'POST', '/v1/relays', token, {name}),
   renameRelay: (server: string, token: string, id: string, name: string) =>
     request<Relay>(server, 'PATCH', `/v1/relays/${id}`, token, {name}),
+  setRelaySlug: (server: string, token: string, id: string, slug: string) =>
+    request<Relay>(server, 'PATCH', `/v1/relays/${id}`, token, {slug}),
   setRelayManage: (server: string, token: string, id: string, manageDeployments: boolean) =>
     request<Relay>(server, 'PATCH', `/v1/relays/${id}`, token, {manageDeployments}),
   deleteRelay: (server: string, token: string, id: string) => request<void>(server, 'DELETE', `/v1/relays/${id}`, token),

@@ -119,6 +119,11 @@ describe('bridge form', () => {
     expect([named.domainId, named.subdomain]).toEqual(['dom1', 'turn']);
     const relayOnly = bridgeFormToInput({...f, from: 'a', domainId: 'dom1'});
     expect(relayOnly.domainId).toBeUndefined();
+
+    // A slug is sent lowercased when given, and left out when blank so the
+    // server makes one (or keeps the current one).
+    expect(bridgeFormToInput({...f, slug: ' TURN-1 '}).slug).toBe('turn-1');
+    expect('slug' in bridgeFormToInput({...f, slug: '  '})).toBe(false);
   });
 
   it('describes the path', () => {

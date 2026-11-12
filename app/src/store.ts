@@ -263,6 +263,11 @@ export async function renameRelay(id: string, name: string): Promise<void> {
   await refresh().catch(() => {});
 }
 
+export async function setRelaySlug(id: string, slug: string): Promise<void> {
+  await authed((s, t) => api.setRelaySlug(s, t, id, slug));
+  await refresh().catch(() => {});
+}
+
 export async function setRelayManage(id: string, on: boolean): Promise<void> {
   await authed((s, t) => api.setRelayManage(s, t, id, on));
   await refresh().catch(() => {});
