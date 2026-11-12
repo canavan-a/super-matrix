@@ -64,6 +64,8 @@ export interface ServerInfo {
   smtp: boolean;
   /** ports public bridges may use, e.g. "20000-20100,3478"; "" when public bridges are off */
   publicPorts: string;
+  /** what the server supports beyond the base API, e.g. "email-groups"; missing from older servers */
+  features?: string[];
 }
 
 export type Transport = 'quic' | 'websocket';
@@ -161,6 +163,8 @@ export interface Deployment {
   hasBasicPassword: boolean;
   /** who can get an email code (otp mode) */
   otpEmails: string[];
+  /** IDs of the email groups the sign-in list includes; missing from servers before email groups */
+  emailGroups?: string[];
   ipAllowlist: string[];
   /** IDs of the IP groups the allow list includes */
   ipGroups: string[];
@@ -205,6 +209,8 @@ export interface DeploymentInput {
   basicUser?: string;
   basicPassword?: string;
   otpEmails?: string[];
+  /** replaces the email groups the sign-in list includes, by ID */
+  emailGroups?: string[];
   ipAllowlist?: string[];
   /** replaces the IP groups the allow list includes, by ID */
   ipGroups?: string[];
@@ -321,6 +327,23 @@ export interface IPGroupInput {
   entries?: string[];
 }
 
+/** A named list of email addresses (and *@domain wildcards) that email-code sign-in lists include by reference. */
+export interface EmailGroup {
+  id: string;
+  name: string;
+  /** normalized, lowercased addresses */
+  entries: string[];
+  /** how many deployments include it */
+  deployments: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EmailGroupInput {
+  name?: string;
+  entries?: string[];
+}
+
 /** /v1/status: each online relay's live state, and each public bridge's listen status on the server. */
 export interface LiveStatus {
   relays: Record<string, RelayState>;
@@ -385,6 +408,13 @@ export const api = {
   updateIPGroup: (server: string, token: string, id: string, g: IPGroupInput) =>
     request<IPGroup>(server, 'PATCH', `/v1/ip-groups/${id}`, token, g),
   deleteIPGroup: (server: string, token: string, id: string) => request<void>(server, 'DELETE', `/v1/ip-groups/${id}`, token),
+  emailGroups: (server: string, token: string) => request<EmailGroup[]>(server, 'GET', '/v1/email-groups', token),
+  createEmailGroup: (server: string, token: string, g: EmailGroupInput) =>
+    request<EmailGroup>(server, 'POST', '/v1/email-groups', token, g),
+  updateEmailGroup: (server: string, token: string, id: string, g: EmailGroupInput) =>
+    request<EmailGroup>(server, 'PATCH', `/v1/email-groups/${id}`, token, g),
+  deleteEmailGroup: (server: string, token: string, id: string) =>
+    request<void>(server, 'DELETE', `/v1/email-groups/${id}`, token),
 
   bridges: (server: string, token: string) => request<Bridge[]>(server, 'GET', '/v1/bridges', token),
   createBridge: (server: string, token: string, b: BridgeInput) => request<Bridge>(server, 'POST', '/v1/bridges', token, b),

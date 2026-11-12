@@ -16,7 +16,7 @@ import {
   PathRule,
   Protocol,
 } from '../api';
-import {IPGroupPicker} from '../components/IPGroupPicker';
+import {GroupPicker} from '../components/GroupPicker';
 import {Icon} from '../components/Icon';
 import {transportBadge, viaLine} from '../link';
 import {Notice} from '../components/Notice';
@@ -42,6 +42,7 @@ import {
   deleteToken,
   deploymentHealth,
   saveDeployment,
+  supports,
   updatePathRule,
   useStore,
 } from '../store';
@@ -72,6 +73,8 @@ export interface DeploymentForm {
   basicPassword: string;
   /** one email address per line (otp mode) */
   otpEmails: string;
+  /** IDs of the email groups the sign-in list includes (otp mode) */
+  emailGroups: string[];
   /** one CIDR or address per line */
   ipAllowlist: string;
   /** IDs of the IP groups the allow list includes */
@@ -110,6 +113,7 @@ export function formFrom(
     basicUser: d?.basicUser ?? '',
     basicPassword: '',
     otpEmails: (d?.otpEmails ?? []).join('\n'),
+    emailGroups: d?.emailGroups ?? [],
     ipAllowlist: (d?.ipAllowlist ?? []).join('\n'),
     ipGroups: d?.ipGroups ?? [],
     sshCli: d?.sshCli ?? true,
@@ -147,6 +151,7 @@ export function formToInput(f: DeploymentForm): DeploymentInput {
       .split(/[\n,]/)
       .map(s => s.trim())
       .filter(Boolean),
+    emailGroups: f.emailGroups,
     ipGroups: f.ipGroups,
     sshCli: f.sshCli,
     sshShell: f.sshShell,
@@ -583,6 +588,13 @@ export function DeploymentScreen({
                 One address per line, or *@example.com for everyone at a domain.
                 Taking one off signs that person out.
               </Hint>
+              {supports(info, 'email-groups') && (
+                <GroupPicker
+                  kind="email"
+                  value={form.emailGroups}
+                  onChange={v => set({emailGroups: v})}
+                />
+              )}
               <Label>Stay signed in for</Label>
               <Chips
                 options={TTL_OPTIONS}
@@ -649,7 +661,7 @@ export function DeploymentScreen({
         One address or CIDR range per line, checked before any sign-in. Empty
         (and no IP groups) lets every address try.
       </Hint>
-      <IPGroupPicker value={form.ipGroups} onChange={v => set({ipGroups: v})} />
+      <GroupPicker kind="ip" value={form.ipGroups} onChange={v => set({ipGroups: v})} />
 
       <Label spaced>Path rules</Label>
       <Hint>

@@ -301,3 +301,25 @@ type BridgeIPGroup struct {
 }
 
 func (BridgeIPGroup) TableName() string { return "bridge_ip_groups" }
+
+// EmailGroup is a named list of email addresses (and *@domain wildcards)
+// that email-code sign-in lists can include by reference.
+type EmailGroup struct {
+	ID   string `gorm:"primaryKey"`
+	Name string
+	// Entries is newline-separated normalized addresses, as in OTPEmails.
+	Entries   string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (EmailGroup) TableName() string { return "email_groups" }
+
+// DeploymentEmailGroup includes an email group in a deployment's
+// email-code sign-in list.
+type DeploymentEmailGroup struct {
+	DeploymentID string `gorm:"primaryKey"`
+	EmailGroupID string `gorm:"primaryKey"`
+}
+
+func (DeploymentEmailGroup) TableName() string { return "deployment_email_groups" }

@@ -173,6 +173,18 @@ func (r *Registry) Reload() error {
 	if err := r.db.Find(&bridgeGroups).Error; err != nil {
 		return err
 	}
+	var emailGroups []database.EmailGroup
+	if err := r.db.Find(&emailGroups).Error; err != nil {
+		return err
+	}
+	groupEmails := make(map[string][]string, len(emailGroups))
+	for _, g := range emailGroups {
+		groupEmails[g.ID] = splitLines(g.Entries)
+	}
+	var depEmailGroups []database.DeploymentEmailGroup
+	if err := r.db.Find(&depEmailGroups).Error; err != nil {
+		return err
+	}
 	var rules []database.PathRule
 	if err := r.db.Find(&rules).Error; err != nil {
 		return err
@@ -196,10 +208,8 @@ func (r *Registry) Reload() error {
 				e.burstLimiter = guard.NewLimiter(d.RateLimitBurst, time.Second)
 			}
 		}
-		for _, m := range strings.Split(d.OTPEmails, "\n") {
-			if m = strings.TrimSpace(m); m != "" {
-				e.OTPEmails[m] = true
-			}
+		for _, m := range splitLines(d.OTPEmails) {
+			e.OTPEmails[m] = true
 		}
 		s.byHost[e.Host] = e
 		s.byID[d.ID] = e
@@ -208,6 +218,16 @@ func (r *Registry) Reload() error {
 				ID: d.ID, Protocol: d.Protocol, Host: d.TargetHost, Port: d.TargetPort,
 				TLSSkipVerify: d.TLSSkipVerify, SNI: d.SNI,
 			})
+		}
+	}
+	// An email group's addresses join the deployment's own sign-in list;
+	// AllowsEmail can't tell them apart, so taking someone off a group signs
+	// them out just as taking them off the list does.
+	for _, g := range depEmailGroups {
+		if e := s.byID[g.DeploymentID]; e != nil {
+			for _, m := range groupEmails[g.EmailGroupID] {
+				e.OTPEmails[m] = true
+			}
 		}
 	}
 	for _, g := range depGroups {
@@ -364,4 +384,15 @@ func (e *Entry) PathAllowed(reqPath, ip string) bool {
 		}
 	}
 	return false
+}
+
+// splitLines is the non-blank, trimmed lines of a newline-separated list.
+func splitLines(s string) []string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
 }

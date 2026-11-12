@@ -14,6 +14,8 @@ import {
   DeploymentInput,
   Domain,
   DomainDns,
+  EmailGroup,
+  EmailGroupInput,
   IPGroup,
   IPGroupInput,
   PathRule,
@@ -37,6 +39,8 @@ interface State {
   bridges: Bridge[];
   domains: Domain[];
   ipGroups: IPGroup[];
+  /** empty against a server without email groups */
+  emailGroups: EmailGroup[];
   /** relay id → live state; a relay missing here is offline */
   live: Record<string, RelayState>;
   /** public bridge id → "ok" or why the server can't listen on its port */
@@ -63,6 +67,7 @@ const initial: State = {
   bridges: [],
   domains: [],
   ipGroups: [],
+  emailGroups: [],
   live: {},
   publicLive: {},
   loaded: false,
@@ -216,7 +221,7 @@ let refreshing: Promise<void> | null = null;
 export function refresh(): Promise<void> {
   refreshing ??= (async () => {
     try {
-      const [info, relays, deployments, bridges, domains, ipGroups, status] = await authed((s, t) =>
+      const [info, relays, deployments, bridges, domains, ipGroups, emailGroups, status] = await authed((s, t) =>
         Promise.all([
           api.info(s, t),
           api.relays(s, t),
@@ -224,6 +229,8 @@ export function refresh(): Promise<void> {
           api.bridges(s, t),
           api.domains(s, t),
           api.ipGroups(s, t),
+          // A server from before email groups answers 404: treat it as none.
+          api.emailGroups(s, t).catch((): EmailGroup[] => []),
           api.status(s, t),
         ]),
       );
@@ -235,6 +242,7 @@ export function refresh(): Promise<void> {
           bridges,
           domains,
           ipGroups,
+          emailGroups,
           live: status.relays ?? {},
           publicLive: status.public ?? {},
           loaded: true,
@@ -490,4 +498,20 @@ export function resetStore(): void {
   sessions = {};
   state = initial;
   emit();
+}
+
+export async function saveEmailGroup(id: string | null, input: EmailGroupInput): Promise<EmailGroup> {
+  const g = await authed((s, t) => (id ? api.updateEmailGroup(s, t, id, input) : api.createEmailGroup(s, t, input)));
+  await refresh().catch(() => {});
+  return g;
+}
+
+export async function deleteEmailGroup(id: string): Promise<void> {
+  await authed((s, t) => api.deleteEmailGroup(s, t, id));
+  await refresh().catch(() => {});
+}
+
+/** Whether the open server says it supports feature (see ServerInfo.features). */
+export function supports(info: ServerInfo | null | undefined, feature: string): boolean {
+  return !!info?.features?.includes(feature);
 }

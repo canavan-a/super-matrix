@@ -165,6 +165,12 @@ func (a *API) Router() *gin.Engine {
 	admin.PATCH("/ip-groups/:id", a.updateIPGroup)
 	admin.DELETE("/ip-groups/:id", a.deleteIPGroup)
 
+	admin.GET("/email-groups", a.listEmailGroups)
+	admin.POST("/email-groups", a.createEmailGroup)
+	admin.GET("/email-groups/:id", a.getEmailGroup)
+	admin.PATCH("/email-groups/:id", a.updateEmailGroup)
+	admin.DELETE("/email-groups/:id", a.deleteEmailGroup)
+
 	admin.GET("/bridges", a.listBridges)
 	admin.POST("/bridges", a.createBridge)
 	admin.GET("/bridges/:id", a.getBridge)
@@ -193,6 +199,9 @@ func (a *API) publicURL(c *gin.Context, host string) string {
 	return "http://" + host
 }
 
+// serverFeatures is reported in /v1/info.
+var serverFeatures = []string{"slugs", "email-groups"}
+
 func (a *API) info(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"adminHost": a.cfg.AdminHost,
@@ -204,6 +213,10 @@ func (a *API) info(c *gin.Context) {
 		"smtp": a.cfg.SMTPOn(),
 		// publicPorts: where public bridges may listen ("" when they're off).
 		"publicPorts": a.cfg.PublicPorts.String(),
+		// features: what this server supports beyond the base API, so an
+		// app (which can be older or newer than the server) knows what to
+		// offer. Only ever added to.
+		"features": serverFeatures,
 	})
 }
 

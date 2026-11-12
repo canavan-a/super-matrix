@@ -193,10 +193,10 @@ func ipGroupWriteFail(c *gin.Context, g *database.IPGroup, err error) {
 }
 
 // groupWriteFail answers a failed deployment or bridge write that also set
-// its IP groups: a group deleted since cleanIPGroupIDs checked it is a 400.
+// its IP or email groups: a group deleted since it was checked is a 400.
 func groupWriteFail(c *gin.Context, err error) {
 	if errors.Is(err, gorm.ErrForeignKeyViolated) {
-		abort(c, http.StatusBadRequest, "the allow list names an IP group that doesn't exist")
+		abort(c, http.StatusBadRequest, "it names a group that was just deleted; reload and try again")
 		return
 	}
 	abort(c, http.StatusInternalServerError, "server error")
@@ -232,19 +232,26 @@ func (a *API) cleanIPGroupIDs(ids *[]string) ([]string, error) {
 // ipGroupIDsOf maps each owner to its groups' IDs, ordered by group name.
 // model is DeploymentIPGroup or BridgeIPGroup; col its owner column.
 func (a *API) ipGroupIDsOf(model any, col string, ids ...string) map[string][]string {
+	return a.groupIDsOf(model, col, "ip_group_id", "ip_groups", ids...)
+}
+
+// groupIDsOf maps each owner to the IDs of its groups, ordered by group
+// name. model is a join table's model, ownerCol and groupCol its columns,
+// and groupTable the table groupCol points at.
+func (a *API) groupIDsOf(model any, ownerCol, groupCol, groupTable string, ids ...string) map[string][]string {
 	var rows []struct {
-		OwnerID   string
-		IPGroupID string
+		OwnerID string
+		GroupID string
 	}
 	a.db.Model(model).
-		Select(col+" AS owner_id", "ip_group_id").
-		Joins("JOIN ip_groups ON ip_groups.id = ip_group_id").
-		Where(col+" IN ?", ids).
-		Order("ip_groups.name COLLATE NOCASE").
+		Select(ownerCol+" AS owner_id", groupCol+" AS group_id").
+		Joins("JOIN "+groupTable+" ON "+groupTable+".id = "+groupCol).
+		Where(ownerCol+" IN ?", ids).
+		Order(groupTable + ".name COLLATE NOCASE").
 		Scan(&rows)
 	m := map[string][]string{}
 	for _, r := range rows {
-		m[r.OwnerID] = append(m[r.OwnerID], r.IPGroupID)
+		m[r.OwnerID] = append(m[r.OwnerID], r.GroupID)
 	}
 	return m
 }

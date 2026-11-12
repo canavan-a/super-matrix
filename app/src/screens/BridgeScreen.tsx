@@ -9,7 +9,7 @@ import {
   Relay,
   RelayState,
 } from '../api';
-import {IPGroupPicker} from '../components/IPGroupPicker';
+import {GroupPicker} from '../components/GroupPicker';
 import {Notice} from '../components/Notice';
 import {
   Button,
@@ -380,7 +380,7 @@ export function BridgeScreen({
             One address or CIDR range per line. Empty (and no IP groups) lets
             every address in.
           </Hint>
-          <IPGroupPicker
+          <GroupPicker kind="ip"
             value={form.ipGroups}
             onChange={v => set({ipGroups: v})}
           />
