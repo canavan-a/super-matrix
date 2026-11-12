@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useEffect, useState} from 'react';
 import {Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
 import {Relay, RelayState} from '../api';
@@ -8,7 +8,7 @@ import {Notice} from '../components/Notice';
 import {Overlay} from '../components/Overlay';
 import {Button, Chips, CopyBox, Divider, Dot, Hint, Input, Label, Title, ToggleRow} from '../components/ui';
 import {platformConfirm} from '../platformConfirm';
-import {createRelay, deleteRelay, renameRelay, rotateRelay, setRelayManage, useStore} from '../store';
+import {createRelay, deleteRelay, renameRelay, rotateRelay, setRelayManage, setRelaySlug, useStore} from '../store';
 import {Theme, useTheme} from '../theme';
 
 export const REPO = 'github:canavan-a/super-matrix';
@@ -150,6 +150,12 @@ function RelayRow({
   const theme = useTheme();
   const styles = makeStyles(theme);
   const [newName, setNewName] = useState(r.name);
+  const [newSlug, setNewSlug] = useState(r.slug ?? '');
+  // Follow the server when the relay changes under the open row (another
+  // admin, or a refresh after saving), so Rename/Change never send a stale
+  // value back.
+  useEffect(() => setNewName(r.name), [r.name]);
+  useEffect(() => setNewSlug(r.slug ?? ''), [r.slug]);
   const fail = (e: unknown) => onError((e as Error).message);
   const online = !!state;
   const badge = linkBadge(r, state);
@@ -161,6 +167,7 @@ function RelayRow({
         <View style={styles.flex}>
           <Text style={styles.relayName}>{r.name}</Text>
           <Text style={styles.relayMeta} numberOfLines={1}>
+            {r.slug ? `${r.slug} · ` : ''}
             {online ? 'online' : ago(r.lastSeenAt)}
             {hostname ? ` · ${hostname}` : ''}
             {version ? ` · v${version}` : ''} · {r.deployments} deployment
@@ -194,6 +201,31 @@ function RelayRow({
               onPress={() => renameRelay(r.id, newName.trim()).catch(fail)}
             />
           </View>
+          {r.slug !== undefined && (
+            <>
+              <Label spaced>Slug</Label>
+              <View style={styles.row}>
+                <Input
+                  style={styles.flex}
+                  value={newSlug}
+                  onChangeText={v => setNewSlug(v.toLowerCase())}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  accessibilityLabel="Slug"
+                />
+                <Button
+                  label="Change"
+                  kind="secondary"
+                  disabled={!newSlug.trim() || newSlug.trim() === r.slug}
+                  onPress={() => setRelaySlug(r.id, newSlug.trim()).catch(fail)}
+                />
+              </View>
+              <Hint>
+                The name config files use for this relay: lowercase letters, digits and dashes. Renaming the relay
+                doesn't change it.
+              </Hint>
+            </>
+          )}
           <View style={styles.spaced}>
             <ToggleRow
               label="Manage its deployments"

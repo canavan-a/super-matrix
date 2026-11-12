@@ -63,6 +63,9 @@ func newEnvWith(t *testing.T, opt func(*config.Config)) *env {
 	if err := database.Seed(db, cfg.BaseDomain); err != nil {
 		t.Fatal(err)
 	}
+	if err := database.BackfillSlugs(db); err != nil {
+		t.Fatal(err)
+	}
 	reg, err := registry.New(db, cfg)
 	if err != nil {
 		t.Fatal(err)

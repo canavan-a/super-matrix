@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"gorm.io/gorm"
 
 	"main/database"
 	"main/tunnel"
@@ -16,6 +17,7 @@ import (
 type relayDTO struct {
 	ID          string     `json:"id"`
 	Name        string     `json:"name"`
+	Slug        string     `json:"slug"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	LastSeenAt  *time.Time `json:"lastSeenAt"`
 	LastIP      string     `json:"lastIp"`
@@ -44,7 +46,7 @@ func (a *API) relayOut(r database.Relay, online map[string]tunnel.RelayState) re
 	}
 	_, on := online[r.ID]
 	return relayDTO{
-		ID: r.ID, Name: r.Name, CreatedAt: r.CreatedAt, LastSeenAt: r.LastSeenAt, LastIP: r.LastIP,
+		ID: r.ID, Name: r.Name, Slug: r.Slug, CreatedAt: r.CreatedAt, LastSeenAt: r.LastSeenAt, LastIP: r.LastIP,
 		Version: r.Version, Hostname: r.Hostname, Online: on, Deployments: n,
 		Transport: r.Transport, Fallback: r.Fallback, ManageDeployments: r.ManageDeployments,
 		Features: feats, Bridges: nb,
@@ -90,6 +92,8 @@ func (a *API) listRelays(c *gin.Context) {
 func (a *API) createRelay(c *gin.Context) {
 	var b struct {
 		Name string `json:"name"`
+		// Slug is optional; one is made from the name when it's missing.
+		Slug *string `json:"slug"`
 	}
 	if err := c.ShouldBindJSON(&b); err != nil || cleanName(b.Name) == "" {
 		abort(c, http.StatusBadRequest, "name required")
@@ -97,8 +101,16 @@ func (a *API) createRelay(c *gin.Context) {
 	}
 	tok := database.NewSecret("smr")
 	r := database.Relay{ID: database.NewID(), Name: cleanName(b.Name), TokenHash: database.HashSecret(tok), CreatedAt: a.now()}
-	if err := a.db.Create(&r).Error; err != nil {
-		abort(c, http.StatusInternalServerError, "server error")
+	err := a.db.Transaction(func(tx *gorm.DB) error {
+		s, err := slugFor(tx, "relays", b.Slug, r.Name, "relay", r.ID, "")
+		if err != nil {
+			return err
+		}
+		r.Slug = s
+		return tx.Create(&r).Error
+	})
+	if err != nil {
+		a.writeFail(c, err, "relays", r.Slug, r.ID)
 		return
 	}
 	a.changed()
@@ -110,10 +122,11 @@ func (a *API) updateRelay(c *gin.Context) {
 	if r == nil {
 		return
 	}
-	// Either or both: a new name, and whether the relay may manage its own
-	// deployments.
+	// Any of: a new name, a new slug, and whether the relay may manage its
+	// own deployments.
 	var b struct {
 		Name              *string `json:"name"`
+		Slug              *string `json:"slug"`
 		ManageDeployments *bool   `json:"manageDeployments"`
 	}
 	if err := c.ShouldBindJSON(&b); err != nil {
@@ -133,11 +146,25 @@ func (a *API) updateRelay(c *gin.Context) {
 		r.ManageDeployments = *b.ManageDeployments
 		upd["manage_deployments"] = r.ManageDeployments
 	}
-	if len(upd) == 0 {
+	if len(upd) == 0 && b.Slug == nil {
 		abort(c, http.StatusBadRequest, "nothing to change")
 		return
 	}
-	a.db.Model(r).Updates(upd)
+	err := a.db.Transaction(func(tx *gorm.DB) error {
+		if b.Slug != nil {
+			s, err := slugFor(tx, "relays", b.Slug, r.Name, "relay", r.ID, r.Slug)
+			if err != nil {
+				return err
+			}
+			r.Slug = s
+			upd["slug"] = s
+		}
+		return tx.Model(r).Updates(upd).Error
+	})
+	if err != nil {
+		a.writeFail(c, err, "relays", r.Slug, r.ID)
+		return
+	}
 	a.changed()
 	c.JSON(http.StatusOK, a.relayOut(*r, a.hub.State()))
 }
