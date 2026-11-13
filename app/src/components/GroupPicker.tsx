@@ -26,10 +26,13 @@ export function GroupPicker({
   kind,
   value,
   onChange,
+  disabled,
 }: {
   kind: GroupKind;
   value: string[];
   onChange: (ids: string[]) => void;
+  /** shown but not changeable (the schema manages it) */
+  disabled?: boolean;
 }): React.JSX.Element {
   const ipGroups = useStore(s => s.ipGroups);
   const emailGroups = useStore(s => s.emailGroups);
@@ -46,6 +49,7 @@ export function GroupPicker({
             options={groups.map(g => ({value: g.id, label: `${g.name} (${g.entries.length})`}))}
             value={value}
             onChange={onChange}
+            disabled={disabled}
           />
           <Hint>{text.hint}</Hint>
         </>

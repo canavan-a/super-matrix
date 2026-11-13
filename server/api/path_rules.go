@@ -14,11 +14,12 @@ import (
 )
 
 type pathRuleDTO struct {
-	ID          string    `json:"id"`
-	PathPrefix  string    `json:"pathPrefix"`
-	IPAllowlist []string  `json:"ipAllowlist"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID          string      `json:"id"`
+	PathPrefix  string      `json:"pathPrefix"`
+	IPAllowlist []string    `json:"ipAllowlist"`
+	CreatedAt   time.Time   `json:"createdAt"`
+	UpdatedAt   time.Time   `json:"updatedAt"`
+	Managed     *managedDTO `json:"managed"`
 }
 
 func pathRuleOut(r database.PathRule) pathRuleDTO {
@@ -127,6 +128,9 @@ func (a *API) createPathRule(c *gin.Context) {
 		abort(c, http.StatusBadRequest, "path prefix required")
 		return
 	}
+	if !a.schemaAllowsPathRules(c, d.ID) {
+		return
+	}
 	now := a.now()
 	r := database.PathRule{ID: database.NewID(), DeploymentID: d.ID, CreatedAt: now, UpdatedAt: now}
 	if err := a.applyPathRule(&r, in); err != nil {
@@ -164,8 +168,12 @@ func (a *API) updatePathRule(c *gin.Context) {
 		abort(c, http.StatusBadRequest, "bad json")
 		return
 	}
+	before := *r
 	if err := a.applyPathRule(r, in); err != nil {
 		a.inputFail(c, err)
+		return
+	}
+	if !a.schemaAllowsPathRules(c, d.ID) || !a.schemaAllowsUpdate(c, kindPathRule, r.ID, before.PathPrefix, r.PathPrefix, pathRuleItem(before), pathRuleItem(*r)) {
 		return
 	}
 	r.UpdatedAt = a.now()
@@ -180,6 +188,9 @@ func (a *API) updatePathRule(c *gin.Context) {
 func (a *API) deletePathRule(c *gin.Context) {
 	d := a.findDeployment(c)
 	if d == nil {
+		return
+	}
+	if !a.schemaAllowsPathRules(c, d.ID) || !a.schemaAllowsDelete(c, kindPathRule, c.Param("rid"), "this path rule") {
 		return
 	}
 	res := a.db.Where("id = ? AND deployment_id = ?", c.Param("rid"), d.ID).Delete(&database.PathRule{})

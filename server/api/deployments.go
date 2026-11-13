@@ -64,11 +64,13 @@ type deploymentDTO struct {
 	CertError         string        `json:"certError"`
 	Tokens            []tokenDTO    `json:"tokens"`
 	PathRules         []pathRuleDTO `json:"pathRules"`
-	CreatedAt         time.Time     `json:"createdAt"`
-	UpdatedAt         time.Time     `json:"updatedAt"`
+	// Managed is what the schema manages of it; null when nothing.
+	Managed   *managedDTO `json:"managed"`
+	CreatedAt time.Time   `json:"createdAt"`
+	UpdatedAt time.Time   `json:"updatedAt"`
 }
 
-func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []database.DeploymentToken, groups, emailGroups []string, rules []database.PathRule) deploymentDTO {
+func (a *API) deploymentOut(c *gin.Context, o *ownIndex, d database.Deployment, toks []database.DeploymentToken, groups, emailGroups []string, rules []database.PathRule) deploymentDTO {
 	host, domainID := "", ""
 	if d.Host != nil {
 		host = *d.Host
@@ -98,8 +100,11 @@ func (a *API) deploymentOut(c *gin.Context, d database.Deployment, toks []databa
 	for _, t := range toks {
 		out.Tokens = append(out.Tokens, tokenDTO{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt, ExpiresAt: t.ExpiresAt})
 	}
+	out.Managed = o.managed(kindDeployment, d.ID)
 	for _, r := range rules {
-		out.PathRules = append(out.PathRules, pathRuleOut(r))
+		pr := pathRuleOut(r)
+		pr.Managed = o.managed(kindPathRule, r.ID)
+		out.PathRules = append(out.PathRules, pr)
 	}
 	return out
 }
@@ -151,9 +156,10 @@ func (a *API) listDeployments(c *gin.Context) {
 	groups := a.deploymentIPGroups(ids...)
 	emailGroups := a.deploymentEmailGroups(ids...)
 	rules := a.pathRulesOf(ids...)
+	o := a.owned()
 	out := make([]deploymentDTO, 0, len(ds))
 	for _, d := range ds {
-		out = append(out, a.deploymentOut(c, d, toks[d.ID], groups[d.ID], emailGroups[d.ID], rules[d.ID]))
+		out = append(out, a.deploymentOut(c, o, d, toks[d.ID], groups[d.ID], emailGroups[d.ID], rules[d.ID]))
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -164,7 +170,7 @@ func (a *API) deploymentIPGroups(ids ...string) map[string][]string {
 
 // deploymentFull is d as the API returns it, with its tokens and groups.
 func (a *API) deploymentFull(c *gin.Context, d database.Deployment) deploymentDTO {
-	return a.deploymentOut(c, d, a.tokensOf(d.ID)[d.ID], a.deploymentIPGroups(d.ID)[d.ID], a.deploymentEmailGroups(d.ID)[d.ID], a.pathRulesOf(d.ID)[d.ID])
+	return a.deploymentOut(c, a.owned(), d, a.tokensOf(d.ID)[d.ID], a.deploymentIPGroups(d.ID)[d.ID], a.deploymentEmailGroups(d.ID)[d.ID], a.pathRulesOf(d.ID)[d.ID])
 }
 
 func (a *API) getDeployment(c *gin.Context) {
@@ -213,6 +219,11 @@ type deploymentInput struct {
 	RateLimitRequests *int  `json:"rateLimitRequests"`
 	RateLimitPeriodS  *int  `json:"rateLimitPeriodS"`
 	RateLimitBurst    *int  `json:"rateLimitBurst"`
+
+	// loginPassHash and basicPassHash set a password by its bcrypt hash
+	// (the schema never carries plain text); not settable over JSON.
+	loginPassHash *string
+	basicPassHash *string
 }
 
 var (
@@ -241,7 +252,7 @@ func hashPassword(pw string) (string, error) {
 // apply copies the set fields of in onto d and checks the result.
 // emailGroups is how many email groups d's sign-in list will include once
 // written, which can stand in for addresses on its own list.
-func (a *API) apply(d *database.Deployment, in deploymentInput, emailGroups int) error {
+func (a *API) apply(db *gorm.DB, d *database.Deployment, in deploymentInput, emailGroups int) error {
 	if in.RelayID != nil {
 		d.RelayID = *in.RelayID
 	}
@@ -323,6 +334,20 @@ func (a *API) apply(d *database.Deployment, in deploymentInput, emailGroups int)
 			return err
 		}
 	}
+	for _, h := range []struct {
+		set  *string
+		dest *string
+	}{{in.loginPassHash, &d.LoginPassHash}, {in.basicPassHash, &d.BasicPassHash}} {
+		if h.set == nil {
+			continue
+		}
+		if *h.set != "" {
+			if _, err := bcrypt.Cost([]byte(*h.set)); err != nil {
+				return inputError("password hash: not a bcrypt hash")
+			}
+		}
+		*h.dest = *h.set
+	}
 	if in.OTPEmails != nil {
 		if d.OTPEmails, err = normalizeEmails(*in.OTPEmails, "email list"); err != nil {
 			return err
@@ -353,7 +378,7 @@ func (a *API) apply(d *database.Deployment, in deploymentInput, emailGroups int)
 		d.IPAllowlist = strings.Join(lines, "\n")
 	}
 
-	dom, err := a.domainFor(d)
+	dom, err := a.domainFor(db, d)
 	if err != nil {
 		return err
 	}
@@ -411,7 +436,7 @@ func (a *API) apply(d *database.Deployment, in deploymentInput, emailGroups int)
 	default:
 		return inputError("auth mode must be none, login, otp, basic or token")
 	}
-	r, err := database.First[database.Relay](a.db.Where("id = ?", d.RelayID))
+	r, err := database.First[database.Relay](db.Where("id = ?", d.RelayID))
 	if err != nil {
 		return err
 	}
@@ -419,7 +444,7 @@ func (a *API) apply(d *database.Deployment, in deploymentInput, emailGroups int)
 		return inputError("pick a relay")
 	}
 	var clash int64
-	a.db.Model(&database.Deployment{}).Where("host = ? AND id <> ?", host, d.ID).Count(&clash)
+	db.Model(&database.Deployment{}).Where("host = ? AND id <> ?", host, d.ID).Count(&clash)
 	if clash > 0 {
 		return inputError(host + " is taken")
 	}
@@ -447,22 +472,16 @@ func (a *API) createDeployment(c *gin.Context) {
 	if !ownRelay(c, &in) {
 		return
 	}
-	now := a.now()
-	d := database.Deployment{
-		ID: database.NewID(), Protocol: database.ProtocolHTTP, Enabled: true, AuthMode: database.AuthLogin, SSHCLI: true, SSHShell: true,
-		AllowRootLogin: true, SessionTTLS: 7 * 24 * 3600, CertStatus: database.CertPending,
-		RateLimitRequests: 100, RateLimitPeriodS: 60,
-		CreatedAt: now, UpdatedAt: now,
+	if !a.schemaAllowsCreate(c, collDeployments) {
+		return
 	}
-	if !a.cfg.TLSOn() {
-		d.CertStatus = database.CertOff
-	}
+	d := a.newDeployment()
 	emailGroups, err := a.cleanEmailGroupIDs(in.EmailGroups)
 	if err != nil {
 		a.inputFail(c, err)
 		return
 	}
-	if err := a.apply(&d, in, len(emailGroups)); err != nil {
+	if err := a.apply(a.db, &d, in, len(emailGroups)); err != nil {
 		a.inputFail(c, err)
 		return
 	}
@@ -514,7 +533,8 @@ func (a *API) updateDeployment(c *gin.Context) {
 		abort(c, http.StatusInternalServerError, "server error")
 		return
 	}
-	if err := a.apply(d, in, nEmailGroups); err != nil {
+	before := *d
+	if err := a.apply(a.db, d, in, nEmailGroups); err != nil {
 		a.inputFail(c, err)
 		return
 	}
@@ -525,6 +545,9 @@ func (a *API) updateDeployment(c *gin.Context) {
 	groups, err := a.cleanIPGroupIDs(in.IPGroups)
 	if err != nil {
 		a.inputFail(c, err)
+		return
+	}
+	if !a.deploymentGuard(c, before, *d, groups, emailGroups) {
 		return
 	}
 	err = a.db.Transaction(func(tx *gorm.DB) error {
@@ -552,6 +575,9 @@ func (a *API) updateDeployment(c *gin.Context) {
 func (a *API) deleteDeployment(c *gin.Context) {
 	d := a.findDeployment(c)
 	if d == nil {
+		return
+	}
+	if !a.schemaAllowsDelete(c, kindDeployment, d.ID, hostOf(*d)) {
 		return
 	}
 	a.db.Delete(d)
@@ -647,10 +673,10 @@ func (a *API) deleteToken(c *gin.Context) {
 
 // domainFor is d's domain; a new deployment with none named gets the only
 // domain, if there's exactly one.
-func (a *API) domainFor(d *database.Deployment) (*database.Domain, error) {
+func (a *API) domainFor(db *gorm.DB, d *database.Deployment) (*database.Domain, error) {
 	if d.DomainID == nil {
 		var ds []database.Domain
-		if err := a.db.Limit(2).Find(&ds).Error; err != nil {
+		if err := db.Limit(2).Find(&ds).Error; err != nil {
 			return nil, err
 		}
 		if len(ds) != 1 {
@@ -659,7 +685,7 @@ func (a *API) domainFor(d *database.Deployment) (*database.Domain, error) {
 		d.DomainID = &ds[0].ID
 		return &ds[0], nil
 	}
-	dom, err := database.First[database.Domain](a.db.Where("id = ?", *d.DomainID))
+	dom, err := database.First[database.Domain](db.Where("id = ?", *d.DomainID))
 	if err != nil {
 		return nil, err
 	}
@@ -667,4 +693,20 @@ func (a *API) domainFor(d *database.Deployment) (*database.Domain, error) {
 		return nil, inputError("pick a domain")
 	}
 	return dom, nil
+}
+
+// newDeployment is a deployment with every default a new one starts with;
+// the schema's defaults for left-out fields come from here too.
+func (a *API) newDeployment() database.Deployment {
+	now := a.now()
+	d := database.Deployment{
+		ID: database.NewID(), Protocol: database.ProtocolHTTP, Enabled: true, AuthMode: database.AuthLogin, SSHCLI: true, SSHShell: true,
+		AllowRootLogin: true, SessionTTLS: 7 * 24 * 3600, CertStatus: database.CertPending,
+		RateLimitRequests: 100, RateLimitPeriodS: 60,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if !a.cfg.TLSOn() {
+		d.CertStatus = database.CertOff
+	}
+	return d
 }

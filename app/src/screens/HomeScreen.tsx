@@ -10,6 +10,7 @@ import {
 
 import {AuthMode, Bridge, Deployment, Relay, RelayState} from '../api';
 import {Icon, IconName} from '../components/Icon';
+import {ManagedBadge} from '../components/Managed';
 import {Overlay} from '../components/Overlay';
 import {SpringyPull} from '../components/SpringyPull';
 import {Button, Chips, Dot} from '../components/ui';
@@ -351,12 +352,15 @@ function BridgeRow({
         <Dot color={healthColor(theme, health.health)} />
       </View>
       <View style={styles.rowBody}>
-        <Text
-          style={[styles.host, !b.enabled && styles.hostDisabled]}
-          numberOfLines={1}>
-          {role === 'from' ? '→ ' : role === 'to' ? '← ' : ''}
-          {b.name}
-        </Text>
+        <View style={styles.hostRow}>
+          <Text
+            style={[styles.host, styles.hostShrink, !b.enabled && styles.hostDisabled]}
+            numberOfLines={1}>
+            {role === 'from' ? '→ ' : role === 'to' ? '← ' : ''}
+            {b.name}
+          </Text>
+          <ManagedBadge managed={b.managed} />
+        </View>
         <Text style={styles.target} numberOfLines={1}>
           {line} · {b.protocol}
         </Text>
@@ -491,11 +495,14 @@ function DeploymentRow({
         <Dot color={healthColor(theme, health.health)} />
       </View>
       <View style={styles.rowBody}>
-        <Text
-          style={[styles.host, !d.enabled && styles.hostDisabled]}
-          numberOfLines={1}>
-          {d.host}
-        </Text>
+        <View style={styles.hostRow}>
+          <Text
+            style={[styles.host, styles.hostShrink, !d.enabled && styles.hostDisabled]}
+            numberOfLines={1}>
+            {d.host}
+          </Text>
+          <ManagedBadge managed={d.managed} />
+        </View>
         <Text style={styles.target} numberOfLines={1}>
           {d.protocol}://{d.targetHost}:{d.targetPort} · {relay}
         </Text>
@@ -611,6 +618,8 @@ function makeStyles(theme: Theme) {
     rowDot: {alignSelf: 'flex-start', paddingTop: 6},
     rowBody: {flex: 1, minWidth: 0, gap: 3},
     host: {fontSize: 15, fontWeight: '700', color: theme.text},
+    hostRow: {flexDirection: 'row', alignItems: 'center', gap: 6},
+    hostShrink: {flexShrink: 1},
     target: {fontSize: 12, fontFamily: 'monospace', color: theme.textMuted},
     badges: {
       flexDirection: 'row',

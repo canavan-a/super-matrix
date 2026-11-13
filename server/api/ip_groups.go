@@ -21,10 +21,11 @@ type ipGroupDTO struct {
 	Name    string   `json:"name"`
 	Entries []string `json:"entries"`
 	// Deployments and Bridges count the allow lists that include it.
-	Deployments int64     `json:"deployments"`
-	Bridges     int64     `json:"bridges"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	Deployments int64       `json:"deployments"`
+	Bridges     int64       `json:"bridges"`
+	CreatedAt   time.Time   `json:"createdAt"`
+	UpdatedAt   time.Time   `json:"updatedAt"`
+	Managed     *managedDTO `json:"managed"`
 }
 
 func (a *API) ipGroupOut(g database.IPGroup) ipGroupDTO {
@@ -34,6 +35,7 @@ func (a *API) ipGroupOut(g database.IPGroup) ipGroupDTO {
 	return ipGroupDTO{
 		ID: g.ID, Name: g.Name, Entries: splitAllowlist(g.Entries),
 		Deployments: nd, Bridges: nb, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt,
+		Managed: a.owned().managed(kindIPGroup, g.ID),
 	}
 }
 
@@ -124,6 +126,9 @@ func (a *API) createIPGroup(c *gin.Context) {
 		abort(c, http.StatusBadRequest, "bad json")
 		return
 	}
+	if !a.schemaAllowsCreate(c, collIPGroups) {
+		return
+	}
 	now := a.now()
 	g := database.IPGroup{ID: database.NewID(), CreatedAt: now, UpdatedAt: now}
 	if err := applyIPGroup(&g, in); err != nil {
@@ -148,8 +153,15 @@ func (a *API) updateIPGroup(c *gin.Context) {
 		abort(c, http.StatusBadRequest, "bad json")
 		return
 	}
+	before := *g
 	if err := applyIPGroup(g, in); err != nil {
 		a.inputFail(c, err)
+		return
+	}
+	if !a.schemaAllowsUpdate(c, kindIPGroup, g.ID, before.Name, g.Name, groupItem(before.Entries), groupItem(g.Entries)) {
+		return
+	}
+	if !a.schemaAllowsGroupRename(c, kindIPGroup, g.ID, before.Name, g.Name) {
 		return
 	}
 	g.UpdatedAt = a.now()
@@ -164,6 +176,9 @@ func (a *API) updateIPGroup(c *gin.Context) {
 func (a *API) deleteIPGroup(c *gin.Context) {
 	g := a.findIPGroup(c)
 	if g == nil {
+		return
+	}
+	if !a.schemaAllowsDelete(c, kindIPGroup, g.ID, g.Name) {
 		return
 	}
 	if out := a.ipGroupOut(*g); out.Deployments > 0 || out.Bridges > 0 {
@@ -239,11 +254,16 @@ func (a *API) ipGroupIDsOf(model any, col string, ids ...string) map[string][]st
 // name. model is a join table's model, ownerCol and groupCol its columns,
 // and groupTable the table groupCol points at.
 func (a *API) groupIDsOf(model any, ownerCol, groupCol, groupTable string, ids ...string) map[string][]string {
+	return groupIDsIn(a.db, model, ownerCol, groupCol, groupTable, ids...)
+}
+
+// groupIDsIn is groupIDsOf on db (a transaction, say).
+func groupIDsIn(db *gorm.DB, model any, ownerCol, groupCol, groupTable string, ids ...string) map[string][]string {
 	var rows []struct {
 		OwnerID string
 		GroupID string
 	}
-	a.db.Model(model).
+	db.Model(model).
 		Select(ownerCol+" AS owner_id", groupCol+" AS group_id").
 		Joins("JOIN "+groupTable+" ON "+groupTable+".id = "+groupCol).
 		Where(ownerCol+" IN ?", ids).

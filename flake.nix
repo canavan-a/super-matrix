@@ -132,9 +132,84 @@
             (cd "${repoRoot}/app" && E2E=1 ${pkgs.nodejs_22}/bin/npx jest __tests__/e2e.test.ts --forceExit)
           '';
 
+          # start: the whole stack in one terminal. Builds the server, relay and
+          # web app; starts the server (which serves the app on :8080); signs
+          # in with the dev root password; creates (or re-keys) a relay called
+          # "local" and runs it. Ctrl-C stops everything. --no-web skips
+          # rebuilding the app. The relay's local API goes on :3389, clear of
+          # an installed relay's :3388. For hot reload, use run-app-web.
+          start = script "start" ''
+            set -euo pipefail
+            ${devEnv}
+            logs="${dataDir}/logs"
+            bin="${dataDir}/bin"
+            api="http://localhost:${port}"
+            curl="${pkgs.curl}/bin/curl"
+            jq="${pkgs.jq}/bin/jq"
+            mkdir -p "$logs" "$bin"
+
+            if $curl -sf "$api/health" >/dev/null 2>&1; then
+              echo "something is already serving $api (run dev-down first)" >&2
+              exit 1
+            fi
+
+            echo "building server and relay…"
+            (cd "${repoRoot}/server" && ${pkgs.go}/bin/go build -o "$bin/" ./cmd/supermatrix-server ./cmd/supermatrix-relay)
+            if [ "''${1:-}" != "--no-web" ]; then
+              echo "building the web app…"
+              (cd "${repoRoot}/app" && { [ -d node_modules ] || ${pkgs.nodejs_22}/bin/npm ci; } && ${pkgs.nodejs_22}/bin/npm run build:web)
+            fi
+            # The server serves the built app on its own address.
+            export SUPERMATRIX_STATIC_DIR="${repoRoot}/app/dist"
+
+            pids=()
+            cleanup() {
+              trap - EXIT INT TERM
+              for p in "''${pids[@]}"; do kill "$p" 2>/dev/null || true; done
+              wait 2>/dev/null || true
+              echo "stopped server and relay"
+            }
+            trap cleanup EXIT INT TERM
+
+            "$bin/supermatrix-server" > "$logs/supermatrix.log" 2>&1 &
+            pids+=($!)
+            for _ in $(seq 60); do
+              $curl -sf "$api/health" >/dev/null 2>&1 && break
+              sleep 0.5
+            done
+            if ! $curl -sf "$api/health" >/dev/null 2>&1; then
+              echo "the server didn't come up; see $logs/supermatrix.log" >&2
+              exit 1
+            fi
+
+            session=$($curl -sf -X POST "$api/v1/login" -H 'content-type: application/json' \
+              --data "$($jq -n --arg p "$SUPERMATRIX_ROOT_PASSWORD" '{password: $p}')" | $jq -r .token)
+            auth="Authorization: Bearer $session"
+            relay_id=$($curl -sf "$api/v1/relays" -H "$auth" | $jq -r 'map(select(.name == "local"))[0].id // empty')
+            if [ -n "$relay_id" ]; then
+              relay_token=$($curl -sf -X POST "$api/v1/relays/$relay_id/rotate" -H "$auth" | $jq -r .token)
+            else
+              relay_token=$($curl -sf -X POST "$api/v1/relays" -H "$auth" -H 'content-type: application/json' \
+                --data '{"name":"local"}' | $jq -r .token)
+            fi
+
+            SUPERMATRIX_SERVER_URL="$api" SUPERMATRIX_RELAY_TOKEN="$relay_token" \
+              SUPERMATRIX_LOCAL_ADDR="''${SUPERMATRIX_LOCAL_ADDR:-127.0.0.1:3389}" \
+              "$bin/supermatrix-relay" > "$logs/relay.log" 2>&1 &
+            pids+=($!)
+
+            echo
+            echo "app     $api   (root password: $SUPERMATRIX_ROOT_PASSWORD)"
+            echo "relay   \"local\", on this machine; deployments are <name>.localhost:${port}"
+            echo "logs    $logs/supermatrix.log, $logs/relay.log"
+            echo "Ctrl-C to stop"
+            wait
+          '';
+
           printHelp = ''
             echo "super-matrix dev shell"
             echo "  run-supermatrix   # foreground: the server with hot reload (air) on localhost:${port}, TLS off"
+            echo "  start             # everything: builds and runs the server + web app on localhost:${port} and a relay called \"local\"; Ctrl-C stops it all"
             echo "  dev-up / dev-down # start/stop the server headless (logs in .data/logs)"
             echo "  run-relay <token> # a relay against the dev server (token from the app)"
             echo "  db-reset          # delete the local database"
@@ -171,6 +246,7 @@
               run-app-web-build
               run-app-android
               run-appart
+              start
               run-tests
               dev-help
             ];

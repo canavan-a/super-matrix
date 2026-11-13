@@ -9,4 +9,5 @@ export type Route =
   | {name: 'relays'}
   | {name: 'domains'}
   | {name: 'groups'}
+  | {name: 'schema'}
   | {name: 'settings'};

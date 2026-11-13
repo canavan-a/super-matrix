@@ -43,9 +43,10 @@ type bridgeDTO struct {
 	Subdomain string `json:"subdomain"`
 	Host      string `json:"host"`
 	// ListenError is why a public bridge's port couldn't be bound.
-	ListenError string    `json:"listenError"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ListenError string      `json:"listenError"`
+	CreatedAt   time.Time   `json:"createdAt"`
+	UpdatedAt   time.Time   `json:"updatedAt"`
+	Managed     *managedDTO `json:"managed"`
 }
 
 func (a *API) bridgeIPGroups(ids ...string) map[string][]string {
@@ -54,10 +55,10 @@ func (a *API) bridgeIPGroups(ids ...string) map[string][]string {
 
 // bridgeFull is b as the API returns it, with its IP groups.
 func (a *API) bridgeFull(b database.Bridge) bridgeDTO {
-	return a.bridgeOut(b, a.bridgeIPGroups(b.ID)[b.ID])
+	return a.bridgeOut(a.owned(), b, a.bridgeIPGroups(b.ID)[b.ID])
 }
 
-func (a *API) bridgeOut(b database.Bridge, groups []string) bridgeDTO {
+func (a *API) bridgeOut(o *ownIndex, b database.Bridge, groups []string) bridgeDTO {
 	if groups == nil {
 		groups = []string{}
 	}
@@ -66,6 +67,7 @@ func (a *API) bridgeOut(b database.Bridge, groups []string) bridgeDTO {
 		ListenHost: b.ListenHost, ListenPort: b.ListenPort, ToRelayID: b.ToRelayID,
 		TargetHost: b.TargetHost, TargetPort: b.TargetPort, UDPIdleS: b.UDPIdleS,
 		IPAllowlist: splitAllowlist(b.IPAllowlist), IPGroups: groups, CreatedAt: b.CreatedAt, UpdatedAt: b.UpdatedAt,
+		Managed: o.managed(kindBridge, b.ID),
 	}
 	if b.DomainID != nil {
 		out.DomainID, out.Subdomain, out.Host = *b.DomainID, b.Subdomain, b.Host
@@ -112,8 +114,9 @@ func (a *API) listBridges(c *gin.Context) {
 		ids = append(ids, b.ID)
 	}
 	groups := a.bridgeIPGroups(ids...)
+	o := a.owned()
 	for _, b := range bs {
-		out = append(out, a.bridgeOut(b, groups[b.ID]))
+		out = append(out, a.bridgeOut(o, b, groups[b.ID]))
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -169,7 +172,7 @@ func bridgeKey(b *database.Bridge) string {
 }
 
 // applyBridge copies the set fields of in onto b and checks the result.
-func (a *API) applyBridge(b *database.Bridge, in bridgeInput, isNew bool) error {
+func (a *API) applyBridge(db *gorm.DB, b *database.Bridge, in bridgeInput, isNew bool) error {
 	before := bridgeKey(b)
 	if in.Name != nil {
 		b.Name = cleanName(*in.Name)
@@ -249,7 +252,7 @@ func (a *API) applyBridge(b *database.Bridge, in bridgeInput, isNew bool) error 
 		return inputError("UDP idle timeout must be 30 s to 24 h")
 	}
 
-	to, err := database.First[database.Relay](a.db.Where("id = ?", b.ToRelayID))
+	to, err := database.First[database.Relay](db.Where("id = ?", b.ToRelayID))
 	if err != nil {
 		return err
 	}
@@ -260,7 +263,7 @@ func (a *API) applyBridge(b *database.Bridge, in bridgeInput, isNew bool) error 
 
 	if b.Public() {
 		b.ListenHost = ""
-		if err := a.bridgeHost(b); err != nil {
+		if err := a.bridgeHost(db, b); err != nil {
 			return err
 		}
 		switch {
@@ -272,7 +275,7 @@ func (a *API) applyBridge(b *database.Bridge, in bridgeInput, isNew bool) error 
 			return inputError(fmt.Sprintf("%s port %d is the server's own", b.Protocol, b.ListenPort))
 		}
 		var n int64
-		if err := a.db.Model(&database.Bridge{}).Where("from_relay_id IS NULL AND protocol = ? AND listen_port = ? AND id <> ?",
+		if err := db.Model(&database.Bridge{}).Where("from_relay_id IS NULL AND protocol = ? AND listen_port = ? AND id <> ?",
 			b.Protocol, b.ListenPort, b.ID).Count(&n).Error; err != nil {
 			return err
 		}
@@ -291,7 +294,7 @@ func (a *API) applyBridge(b *database.Bridge, in bridgeInput, isNew bool) error 
 		if *b.FromRelayID == b.ToRelayID {
 			return inputError("a bridge connects two different relays")
 		}
-		from, err := database.First[database.Relay](a.db.Where("id = ?", *b.FromRelayID))
+		from, err := database.First[database.Relay](db.Where("id = ?", *b.FromRelayID))
 		if err != nil {
 			return err
 		}
@@ -300,7 +303,7 @@ func (a *API) applyBridge(b *database.Bridge, in bridgeInput, isNew bool) error 
 		}
 		relays = append(relays, from)
 		var n int64
-		if err := a.db.Model(&database.Bridge{}).Where("from_relay_id = ? AND protocol = ? AND listen_host = ? AND listen_port = ? AND id <> ?",
+		if err := db.Model(&database.Bridge{}).Where("from_relay_id = ? AND protocol = ? AND listen_host = ? AND listen_port = ? AND id <> ?",
 			*b.FromRelayID, b.Protocol, b.ListenHost, b.ListenPort, b.ID).Count(&n).Error; err != nil {
 			return err
 		}
@@ -364,9 +367,10 @@ func (a *API) createBridge(c *gin.Context) {
 		abort(c, http.StatusBadRequest, "bad json")
 		return
 	}
-	now := a.now()
-	b := database.Bridge{ID: database.NewID(), Enabled: true, ListenHost: "127.0.0.1",
-		UDPIdleS: int(tunnel.DefaultUDPIdle / time.Second), CreatedAt: now, UpdatedAt: now}
+	if !a.schemaAllowsCreate(c, collBridges) {
+		return
+	}
+	b := a.newBridge()
 	if (in.Public == nil || !*in.Public) && in.FromRelayID == nil {
 		abort(c, http.StatusBadRequest, "fromRelayId required (or public: true)")
 		return
@@ -377,7 +381,7 @@ func (a *API) createBridge(c *gin.Context) {
 	if in.ListenPort == nil && in.TargetPort != nil {
 		in.ListenPort = in.TargetPort
 	}
-	if err := a.applyBridge(&b, in, true); err != nil {
+	if err := a.applyBridge(a.db, &b, in, true); err != nil {
 		a.bridgeFail(c, err)
 		return
 	}
@@ -415,7 +419,8 @@ func (a *API) updateBridge(c *gin.Context) {
 		abort(c, http.StatusBadRequest, "bad json")
 		return
 	}
-	if err := a.applyBridge(b, in, false); err != nil {
+	before := *b
+	if err := a.applyBridge(a.db, b, in, false); err != nil {
 		a.bridgeFail(c, err)
 		return
 	}
@@ -424,6 +429,13 @@ func (a *API) updateBridge(c *gin.Context) {
 	groups, err := a.cleanIPGroupIDs(in.IPGroups)
 	if err != nil {
 		a.inputFail(c, err)
+		return
+	}
+	after := *b
+	if in.Slug != nil && strings.TrimSpace(*in.Slug) != "" {
+		after.Slug = strings.ToLower(strings.TrimSpace(*in.Slug))
+	}
+	if !a.bridgeGuard(c, before, after, groups) {
 		return
 	}
 	err = a.db.Transaction(func(tx *gorm.DB) error {
@@ -453,6 +465,9 @@ func (a *API) deleteBridge(c *gin.Context) {
 	if b == nil {
 		return
 	}
+	if !a.schemaAllowsDelete(c, kindBridge, b.ID, b.Slug) {
+		return
+	}
 	a.db.Delete(b)
 	a.changed()
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -471,13 +486,13 @@ func (a *API) onBridge(fromRelay, id string) (string, string, error) {
 // bridgeHost works out a public bridge's DNS name from its domain: the
 // subdomain under a wildcard domain, or an exact domain itself. Several
 // bridges (and a deployment) can share a name: they differ by port.
-func (a *API) bridgeHost(b *database.Bridge) error {
+func (a *API) bridgeHost(db *gorm.DB, b *database.Bridge) error {
 	b.Host = ""
 	if b.DomainID == nil {
 		b.Subdomain = ""
 		return nil
 	}
-	d, err := database.First[database.Domain](a.db.Where("id = ?", *b.DomainID))
+	d, err := database.First[database.Domain](db.Where("id = ?", *b.DomainID))
 	if err != nil {
 		return err
 	}
@@ -504,4 +519,11 @@ func (a *API) bridgeDNS(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, a.checkDNS(c, b.Host))
+}
+
+// newBridge is a bridge with every default a new one starts with.
+func (a *API) newBridge() database.Bridge {
+	now := a.now()
+	return database.Bridge{ID: database.NewID(), Enabled: true, ListenHost: "127.0.0.1",
+		UDPIdleS: int(tunnel.DefaultUDPIdle / time.Second), CreatedAt: now, UpdatedAt: now}
 }

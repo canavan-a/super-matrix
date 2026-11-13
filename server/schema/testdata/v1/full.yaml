@@ -1,0 +1,42 @@
+# Frozen: every version 1 document must keep parsing the same way forever.
+version: 1
+domains:
+  - "*.example.com"
+  - status.example.org
+  - "..."
+groups:
+  ip:
+    office:
+      entries: [203.0.113.0/24, "..."]
+  email:
+    team:
+      entries: [ann@example.com, "*@corp.example"]
+      ui: [entries]
+deployments:
+  "...": true
+  grafana.example.com:
+    relay: homelab
+    target_host: 10.0.0.5
+    target_port: 3000
+    auth_mode: otp
+    otp_emails: [bob@example.com]
+    email_groups: [team]
+    ip_groups: [office]
+    ip_allowlist: ["..."]
+    path_rules:
+      /admin:
+        ip_allowlist: [10.0.0.0/8]
+    ui: [enabled]
+  status.example.org:
+    relay: homelab
+    domain: status.example.org
+    target_host: 10.0.0.6
+    target_port: 80
+    auth_mode: login
+    login_password: {hash: "$2a$10$abcdefghijklmnopqrstuuJ0mN4Nq7mYyU0uFPpbQ6V9N3/3jx2iW"}
+bridges:
+  minecraft:
+    public: true
+    listen_port: 25565
+    to_relay: homelab
+    target_host: 10.0.0.7

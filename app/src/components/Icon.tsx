@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Copy,
   ExternalLink,
+  FileCode,
   Globe,
   Info,
   KeyRound,
@@ -49,7 +50,8 @@ export type IconName =
   | 'power-off'
   | 'mail'
   | 'bridge'
-  | 'network';
+  | 'network'
+  | 'code';
 
 const ICONS: Record<IconName, LucideIcon> = {
   gear: Settings,
@@ -74,6 +76,7 @@ const ICONS: Record<IconName, LucideIcon> = {
   mail: Mail,
   bridge: Cable,
   network: Network,
+  code: FileCode,
   'power-off': PowerOff,
 };
 

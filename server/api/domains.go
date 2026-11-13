@@ -24,8 +24,9 @@ type domainDTO struct {
 	Label       string `json:"label"`
 	Deployments int64  `json:"deployments"`
 	// Bridges counts the public bridges named on it.
-	Bridges   int64     `json:"bridges"`
-	CreatedAt time.Time `json:"createdAt"`
+	Bridges   int64       `json:"bridges"`
+	CreatedAt time.Time   `json:"createdAt"`
+	Managed   *managedDTO `json:"managed"`
 }
 
 func (a *API) domainOut(d database.Domain) domainDTO {
@@ -33,7 +34,7 @@ func (a *API) domainOut(d database.Domain) domainDTO {
 	a.db.Model(&database.Deployment{}).Where("domain_id = ?", d.ID).Count(&n)
 	var nb int64
 	a.db.Model(&database.Bridge{}).Where("domain_id = ?", d.ID).Count(&nb)
-	return domainDTO{ID: d.ID, Name: d.Name, Wildcard: d.Wildcard, Label: d.Label(), Deployments: n, Bridges: nb, CreatedAt: d.CreatedAt}
+	return domainDTO{ID: d.ID, Name: d.Name, Wildcard: d.Wildcard, Label: d.Label(), Deployments: n, Bridges: nb, CreatedAt: d.CreatedAt, Managed: a.owned().managed(kindDomain, d.ID)}
 }
 
 // parseDomain reads "*.example.com" (wildcard) or "status.foo.org" (exact).
@@ -79,6 +80,9 @@ func (a *API) createDomain(c *gin.Context) {
 		a.inputFail(c, err)
 		return
 	}
+	if !a.schemaAllowsCreate(c, collDomains) {
+		return
+	}
 	if !wildcard && name == a.cfg.AdminHost {
 		abort(c, http.StatusBadRequest, name+" is the admin host")
 		return
@@ -114,6 +118,9 @@ func (a *API) deleteDomain(c *gin.Context) {
 	}
 	if d == nil {
 		abort(c, http.StatusNotFound, "no such domain")
+		return
+	}
+	if !a.schemaAllowsDelete(c, kindDomain, d.ID, d.Label()) {
 		return
 	}
 	if out := a.domainOut(*d); out.Deployments > 0 {

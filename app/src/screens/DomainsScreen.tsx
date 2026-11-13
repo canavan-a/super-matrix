@@ -2,6 +2,7 @@ import React, {useCallback, useEffect, useState} from 'react';
 import {ScrollView, StyleSheet, Text, View} from 'react-native';
 
 import {Domain, DomainDns} from '../api';
+import {ManagedBadge, useResourceLocked, useStrict} from '../components/Managed';
 import {Notice} from '../components/Notice';
 import {Button, CopyBox, Divider, Dot, Hint, Input, Title} from '../components/ui';
 import {dnsRecords, isWildcardInput} from '../domains';
@@ -17,6 +18,7 @@ export function DomainsScreen(): React.JSX.Element {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const strict = useStrict('domains');
 
   const add = async () => {
     setBusy(true);
@@ -50,8 +52,9 @@ export function DomainsScreen(): React.JSX.Element {
           onSubmitEditing={add}
           accessibilityLabel="Domain"
         />
-        <Button label="Add" onPress={add} busy={busy} disabled={!name.trim()} />
+        <Button label="Add" onPress={add} busy={busy} disabled={!name.trim() || strict} />
       </View>
+      {strict && <Hint>The schema lists every domain: add new ones there (or turn on override in Settings).</Hint>}
       {name.trim() ? (
         <Hint>
           {isWildcardInput(name)
@@ -80,6 +83,7 @@ function DomainRow({d, onError}: {d: Domain; onError: (msg: string) => void}) {
   const styles = makeStyles(theme);
   const [dns, setDns] = useState<DomainDns | null>(null);
   const [checking, setChecking] = useState(false);
+  const pinned = useResourceLocked(d.managed);
 
   const check = useCallback(async () => {
     setChecking(true);
@@ -102,7 +106,10 @@ function DomainRow({d, onError}: {d: Domain; onError: (msg: string) => void}) {
       <View style={styles.head}>
         <Dot color={color} />
         <View style={styles.flex}>
-          <Text style={styles.name}>{d.label}</Text>
+          <View style={styles.row}>
+            <Text style={styles.name}>{d.label}</Text>
+            <ManagedBadge managed={d.managed} />
+          </View>
           <Text style={styles.meta}>
             {d.wildcard ? 'wildcard' : 'exact'} · {d.deployments} deployment{d.deployments === 1 ? '' : 's'}
           </Text>
@@ -117,16 +124,18 @@ function DomainRow({d, onError}: {d: Domain; onError: (msg: string) => void}) {
       )}
       <View style={[styles.row, styles.spaced]}>
         <Button label="Check DNS" kind="secondary" icon="retry" busy={checking} onPress={check} />
-        <Button
-          label="Delete"
-          kind="secondary"
-          icon="trash"
-          onPress={() =>
-            platformConfirm(`Delete ${d.label}?`, 'Deployments on it have to be moved or deleted first.', 'Delete', () =>
-              deleteDomain(d.id).catch(e => onError((e as Error).message)),
-            )
-          }
-        />
+        {!pinned && (
+          <Button
+            label="Delete"
+            kind="secondary"
+            icon="trash"
+            onPress={() =>
+              platformConfirm(`Delete ${d.label}?`, 'Deployments on it have to be moved or deleted first.', 'Delete', () =>
+                deleteDomain(d.id).catch(e => onError((e as Error).message)),
+              )
+            }
+          />
+        )}
       </View>
     </View>
   );
