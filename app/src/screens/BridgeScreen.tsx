@@ -36,6 +36,7 @@ import {
 } from '../store';
 import {Theme, useTheme} from '../theme';
 import {healthColor} from './HomeScreen';
+import {ManagedNotice, useLock, useResourceLocked, useStrict} from '../components/Managed';
 
 /** "public" stands for the server itself as the listening side. */
 export const PUBLIC = 'public';
@@ -143,6 +144,9 @@ export function BridgeScreen({
   const info = useStore(s => s.info);
   const domains = useStore(s => s.domains);
   const [form, setForm] = useState<BridgeForm>(() => bridgeFormFrom(existing));
+  const lock = useLock(existing?.managed);
+  const pinned = useResourceLocked(existing?.managed);
+  const strict = useStrict('bridges');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -239,11 +243,19 @@ export function BridgeScreen({
         </View>
       )}
 
+      <ManagedNotice managed={existing?.managed} noun="bridge" />
+      {!id && strict && (
+        <Notice kind="info" title="The schema lists every bridge">
+          New bridges go in the schema, so this one would be refused. Add it there, or turn on override in Settings.
+        </Notice>
+      )}
+
       <Title>Bridge</Title>
       <Label>Name</Label>
       <Input
         value={form.name}
         onChangeText={v => set({name: v})}
+        editable={!lock('name')}
         placeholder="postgres"
         accessibilityLabel="Name"
       />
@@ -251,6 +263,7 @@ export function BridgeScreen({
       <Input
         value={form.slug}
         onChangeText={v => set({slug: v.toLowerCase()})}
+        editable={!pinned}
         placeholder={existing ? '' : 'made from the name'}
         autoCapitalize="none"
         autoCorrect={false}
@@ -501,7 +514,7 @@ export function BridgeScreen({
         style={styles.save}
       />
 
-      {id && (
+      {id && !pinned && (
         <>
           <Divider />
           <Button label="Delete bridge" kind="danger" onPress={remove} />

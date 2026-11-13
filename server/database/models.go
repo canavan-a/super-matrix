@@ -323,3 +323,49 @@ type DeploymentEmailGroup struct {
 }
 
 func (DeploymentEmailGroup) TableName() string { return "deployment_email_groups" }
+
+// Setting is one server-wide key/value switch.
+type Setting struct {
+	Key   string `gorm:"primaryKey"`
+	Value string
+}
+
+// APIToken scopes.
+const (
+	// ScopeSchema may plan, apply and export the declarative schema.
+	ScopeSchema = "schema"
+)
+
+// APIToken is a long-lived bearer token (sma_…) for automation. Changing
+// the root password doesn't revoke it.
+type APIToken struct {
+	ID         string `gorm:"primaryKey"`
+	Name       string
+	TokenHash  string
+	Scope      string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+}
+
+// SchemaState is the last applied schema document (always ID 1).
+type SchemaState struct {
+	ID        int `gorm:"primaryKey"`
+	Revision  int
+	Document  string
+	DocHash   string
+	AppliedAt time.Time
+	AppliedBy string
+}
+
+func (SchemaState) TableName() string { return "schema_state" }
+
+// SchemaOwned is one thing the last apply took charge of; see the
+// 00014_schema migration.
+type SchemaOwned struct {
+	Kind       string `gorm:"primaryKey"`
+	ResourceID string `gorm:"primaryKey"`
+	Field      string `gorm:"primaryKey"`
+	Entry      string `gorm:"primaryKey"`
+}
+
+func (SchemaOwned) TableName() string { return "schema_owned" }

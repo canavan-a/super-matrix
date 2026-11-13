@@ -41,12 +41,21 @@ import {
   deletePathRule,
   deleteToken,
   deploymentHealth,
+  locked as isLocked,
+  overrideOn,
   saveDeployment,
   supports,
   updatePathRule,
   useStore,
 } from '../store';
 import {Theme, useTheme} from '../theme';
+import {
+  ManagedNotice,
+  useLock,
+  useLockedEntries,
+  useResourceLocked,
+  useStrict,
+} from '../components/Managed';
 import {AUTH_LABEL, healthColor} from './HomeScreen';
 
 export interface DeploymentForm {
@@ -225,6 +234,12 @@ export function DeploymentScreen({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // What the schema manages of it is shown but can't be changed here.
+  const lock = useLock(existing?.managed);
+  const pinned = useResourceLocked(existing?.managed);
+  const schemaEmails = useLockedEntries(existing?.managed, 'otp_emails');
+  const schemaIPs = useLockedEntries(existing?.managed, 'ip_allowlist');
+  const strict = useStrict('deployments');
 
   // A deployment deleted elsewhere: back to the list.
   useEffect(() => {
@@ -306,6 +321,14 @@ export function DeploymentScreen({
         </View>
       )}
 
+      <ManagedNotice managed={existing?.managed} noun="deployment" />
+      {!id && strict && (
+        <Notice kind="info" title="The schema lists every deployment">
+          New deployments go in the schema, so this one would be refused. Add it
+          there, or turn on override in Settings.
+        </Notice>
+      )}
+
       <Title>Where</Title>
       <Label>Domain</Label>
       {domains.length === 0 ? (
@@ -319,7 +342,8 @@ export function DeploymentScreen({
                 styles.relayChip,
                 form.domainId === d.id && styles.relayChipOn,
               ]}
-              onPress={() => set({domainId: d.id})}
+              onPress={() => !pinned && set({domainId: d.id})}
+              disabled={pinned}
               accessibilityRole="radio"
               accessibilityState={{selected: form.domainId === d.id}}>
               <Text
@@ -348,6 +372,7 @@ export function DeploymentScreen({
               style={styles.flex}
               value={form.subdomain}
               onChangeText={v => set({subdomain: v})}
+              editable={!pinned}
               placeholder="app"
               accessibilityLabel="Subdomain"
             />
@@ -379,7 +404,8 @@ export function DeploymentScreen({
                 styles.relayChip,
                 form.relayId === r.id && styles.relayChipOn,
               ]}
-              onPress={() => set({relayId: r.id})}
+              onPress={() => !lock('relay') && set({relayId: r.id})}
+              disabled={lock('relay')}
               accessibilityRole="radio"
               accessibilityState={{selected: form.relayId === r.id}}>
               <Dot color={live[r.id] ? theme.success : theme.textMuted} />
@@ -413,6 +439,7 @@ export function DeploymentScreen({
         ]}
         value={form.protocol}
         onChange={v => set(protocolPatch(form, v))}
+        disabled={lock('protocol')}
       />
       <View style={[styles.subRow, styles.spaced]}>
         <Input
@@ -420,6 +447,7 @@ export function DeploymentScreen({
           mono
           value={form.targetHost}
           onChangeText={v => set({targetHost: v})}
+          editable={!lock('target_host')}
           placeholder="127.0.0.1"
           accessibilityLabel="Target host"
         />
@@ -429,6 +457,7 @@ export function DeploymentScreen({
           mono
           value={form.targetPort}
           onChangeText={v => set({targetPort: v.replace(/[^0-9]/g, '')})}
+          editable={!lock('target_port')}
           placeholder={form.protocol === 'ssh' ? '22' : '8080'}
           keyboardType="number-pad"
           accessibilityLabel="Target port"
@@ -447,11 +476,13 @@ export function DeploymentScreen({
             hint="For a service with a self-signed certificate. The relay still encrypts to it."
             value={form.tlsSkipVerify}
             onChange={v => set({tlsSkipVerify: v})}
+            disabled={lock('tls_skip_verify')}
           />
           <Label>Server name (SNI)</Label>
           <Input
             value={form.sni}
             onChangeText={v => set({sni: v})}
+            editable={!lock('sni')}
             placeholder="Defaults to the target host"
           />
         </>
@@ -464,6 +495,7 @@ export function DeploymentScreen({
           }. On sends ${publicHost}, for apps that check it.`}
           value={form.preserveHost}
           onChange={v => set({preserveHost: v})}
+          disabled={lock('preserve_host')}
         />
       )}
       {form.protocol === 'ssh' && (
@@ -479,13 +511,22 @@ export function DeploymentScreen({
       <Title>Who gets in</Title>
       {/* "Disabled" is the enabled flag, not an auth mode: picking it keeps
           the sign-in below, so turning it back on restores it as it was. */}
+      {/* The chips set two fields, either of which the schema may manage:
+          a choice that would change a locked one can't be picked. */}
       <Chips<AuthChoice>
-        options={
-          form.protocol === 'ssh'
-            ? AUTH_OPTIONS.filter(o => o.value !== 'basic')
-            : AUTH_OPTIONS
-        }
+        options={(form.protocol === 'ssh'
+          ? AUTH_OPTIONS.filter(o => o.value !== 'basic')
+          : AUTH_OPTIONS
+        ).map(o => ({
+          ...o,
+          disabled:
+            o.value === 'off'
+              ? lock('enabled') && form.enabled
+              : (lock('enabled') && !form.enabled) ||
+                (lock('auth_mode') && o.value !== form.authMode),
+        }))}
         value={form.enabled ? form.authMode : 'off'}
+        disabled={lock('auth_mode') && lock('enabled')}
         onChange={v =>
           v === 'off'
             ? set({enabled: false})
@@ -525,6 +566,7 @@ export function DeploymentScreen({
                 onChangeText={v =>
                   set({loginPassword: v, clearLoginPassword: false})
                 }
+                editable={!lock('login_password')}
                 secureTextEntry
                 placeholder={
                   existing?.hasLoginPassword && !form.clearLoginPassword
@@ -554,12 +596,14 @@ export function DeploymentScreen({
                 hint="Sign in here with the server's root password as well."
                 value={form.allowRootLogin}
                 onChange={v => set({allowRootLogin: v})}
+                disabled={lock('allow_root_login')}
               />
               <Label>Stay signed in for</Label>
               <Chips
                 options={TTL_OPTIONS}
                 value={form.sessionTtlS}
                 onChange={v => set({sessionTtlS: v})}
+                disabled={lock('session_ttl_s')}
               />
             </>
           )}
@@ -577,6 +621,7 @@ export function DeploymentScreen({
               <Input
                 value={form.otpEmails}
                 onChangeText={v => set({otpEmails: v})}
+                editable={!lock('otp_emails')}
                 multiline
                 mono
                 keyboardType="email-address"
@@ -588,11 +633,18 @@ export function DeploymentScreen({
                 One address per line, or *@example.com for everyone at a domain.
                 Taking one off signs that person out.
               </Hint>
+              {schemaEmails.length > 0 && (
+                <Hint>
+                  From the schema, kept whatever you change:{' '}
+                  {schemaEmails.join(', ')}.
+                </Hint>
+              )}
               {supports(info, 'email-groups') && (
                 <GroupPicker
                   kind="email"
                   value={form.emailGroups}
                   onChange={v => set({emailGroups: v})}
+                  disabled={lock('email_groups')}
                 />
               )}
               <Label>Stay signed in for</Label>
@@ -600,6 +652,7 @@ export function DeploymentScreen({
                 options={TTL_OPTIONS}
                 value={form.sessionTtlS}
                 onChange={v => set({sessionTtlS: v})}
+                disabled={lock('session_ttl_s')}
               />
               <Hint>After this they're asked for a new code.</Hint>
             </>
@@ -611,6 +664,7 @@ export function DeploymentScreen({
               <Input
                 value={form.basicUser}
                 onChangeText={v => set({basicUser: v})}
+                editable={!lock('basic_user')}
                 placeholder="admin"
                 accessibilityLabel="Basic auth username"
               />
@@ -618,6 +672,7 @@ export function DeploymentScreen({
               <Input
                 value={form.basicPassword}
                 onChangeText={v => set({basicPassword: v})}
+                editable={!lock('basic_password')}
                 secureTextEntry
                 placeholder={
                   existing?.hasBasicPassword
@@ -651,6 +706,7 @@ export function DeploymentScreen({
       <Input
         value={form.ipAllowlist}
         onChangeText={v => set({ipAllowlist: v})}
+        editable={!lock('ip_allowlist')}
         multiline
         mono
         placeholder={'Anyone (empty)\n203.0.113.7\n10.0.0.0/8'}
@@ -661,15 +717,25 @@ export function DeploymentScreen({
         One address or CIDR range per line, checked before any sign-in. Empty
         (and no IP groups) lets every address try.
       </Hint>
-      <GroupPicker kind="ip" value={form.ipGroups} onChange={v => set({ipGroups: v})} />
+      {schemaIPs.length > 0 && (
+        <Hint>
+          From the schema, kept whatever you change: {schemaIPs.join(', ')}.
+        </Hint>
+      )}
+      <GroupPicker
+        kind="ip"
+        value={form.ipGroups}
+        onChange={v => set({ipGroups: v})}
+        disabled={lock('ip_groups')}
+      />
 
       <Label spaced>Path rules</Label>
       <Hint>
-        Layer a stricter allow list onto one path (and everything under it),
-        on top of the allow list above. A path with no rule just uses it.
+        Layer a stricter allow list onto one path (and everything under it), on
+        top of the allow list above. A path with no rule just uses it.
       </Hint>
       {existing ? (
-        <PathRules d={existing} />
+        <PathRules d={existing} locked={lock('path_rules')} />
       ) : (
         <Hint>Save first, then add path rules here.</Hint>
       )}
@@ -679,6 +745,7 @@ export function DeploymentScreen({
         hint="Caps requests from a single client address to this deployment, at the edge."
         value={form.rateLimitEnabled}
         onChange={v => set({rateLimitEnabled: v})}
+        disabled={lock('rate_limit_enabled')}
       />
       {form.rateLimitEnabled && (
         <View style={[styles.subRow, styles.spaced]}>
@@ -686,7 +753,10 @@ export function DeploymentScreen({
             style={styles.flex}
             mono
             value={form.rateLimitRequests}
-            onChangeText={v => set({rateLimitRequests: v.replace(/[^0-9]/g, '')})}
+            onChangeText={v =>
+              set({rateLimitRequests: v.replace(/[^0-9]/g, '')})
+            }
+            editable={!lock('rate_limit_requests')}
             placeholder="100"
             keyboardType="number-pad"
             accessibilityLabel="Requests"
@@ -698,12 +768,14 @@ export function DeploymentScreen({
             ]}
             value={form.rateLimitPeriodS}
             onChange={v => set({rateLimitPeriodS: v})}
+            disabled={lock('rate_limit_period_s')}
           />
           <Input
             style={styles.port}
             mono
             value={form.rateLimitBurst}
             onChangeText={v => set({rateLimitBurst: v.replace(/[^0-9]/g, '')})}
+            editable={!lock('rate_limit_burst')}
             placeholder="burst"
             keyboardType="number-pad"
             accessibilityLabel="Burst"
@@ -726,7 +798,7 @@ export function DeploymentScreen({
         style={styles.save}
       />
 
-      {id && (
+      {id && !pinned && (
         <>
           <Divider />
           <Button label="Delete deployment" kind="danger" onPress={remove} />
@@ -986,9 +1058,11 @@ function splitList(s: string): string[] {
 
 type RuleEdit = {prefix: string; allow: string};
 
-function PathRules({d}: {d: Deployment}) {
+/** locked: the schema sets the whole list, so nothing here can change. */
+function PathRules({d, locked}: {d: Deployment; locked: boolean}) {
   const theme = useTheme();
   const styles = makeStyles(theme);
+  const schema = useStore(s => s.schema);
   const [prefix, setPrefix] = useState('');
   const [allow, setAllow] = useState('');
   const [edits, setEdits] = useState<Record<string, RuleEdit>>({});
@@ -1054,6 +1128,10 @@ function PathRules({d}: {d: Deployment}) {
       )}
       {d.pathRules.map(r => {
         const v = edited(r);
+        // A rule the schema made keeps its prefix; its allow list may be the schema's too.
+        const pinnedRule = locked || (!!r.managed && !overrideOn(schema));
+        const allowLocked =
+          locked || isLocked(r.managed, 'ip_allowlist', schema);
         return (
           <View key={r.id} style={styles.ruleRow}>
             <View style={styles.subRow}>
@@ -1061,60 +1139,72 @@ function PathRules({d}: {d: Deployment}) {
                 style={[styles.flex, styles.mono]}
                 value={v.prefix}
                 onChangeText={t => setEdit(r, {prefix: t})}
+                editable={!pinnedRule}
                 accessibilityLabel={`Path prefix (was ${r.pathPrefix})`}
               />
-              <Pressable
-                onPress={() => remove(r)}
-                accessibilityLabel={`Remove ${r.pathPrefix}`}
-                hitSlop={8}>
-                <Icon name="trash" size={18} color={theme.danger} />
-              </Pressable>
+              {pinnedRule ? (
+                <Icon name="lock" size={16} color={theme.textMuted} />
+              ) : (
+                <Pressable
+                  onPress={() => remove(r)}
+                  accessibilityLabel={`Remove ${r.pathPrefix}`}
+                  hitSlop={8}>
+                  <Icon name="trash" size={18} color={theme.danger} />
+                </Pressable>
+              )}
             </View>
             <Input
               value={v.allow}
               onChangeText={t => setEdit(r, {allow: t})}
+              editable={!allowLocked}
               multiline
               mono
               placeholder="Anyone (empty)"
               style={styles.multiline}
               accessibilityLabel={`IP allow list for ${r.pathPrefix}`}
             />
-            <Button
-              label="Save"
-              kind="secondary"
-              onPress={() => save(r)}
-              busy={busy}
-              style={styles.spacedSmall}
-            />
+            {!(pinnedRule && allowLocked) && (
+              <Button
+                label="Save"
+                kind="secondary"
+                onPress={() => save(r)}
+                busy={busy}
+                style={styles.spacedSmall}
+              />
+            )}
           </View>
         );
       })}
-      <View style={styles.ruleRow}>
-        <Input
-          value={prefix}
-          onChangeText={setPrefix}
-          mono
-          placeholder="/secret"
-          accessibilityLabel="New path prefix"
-        />
-        <Input
-          value={allow}
-          onChangeText={setAllow}
-          multiline
-          mono
-          placeholder={'Anyone (empty)\n203.0.113.7\n10.0.0.0/8'}
-          style={[styles.multiline, styles.spacedSmall]}
-          accessibilityLabel="New path rule IP allow list"
-        />
-        <Button
-          label="Add rule"
-          kind="secondary"
-          onPress={add}
-          busy={busy}
-          disabled={!prefix.trim()}
-          style={styles.spacedSmall}
-        />
-      </View>
+      {locked ? (
+        <Hint>The schema sets this deployment's path rules.</Hint>
+      ) : (
+        <View style={styles.ruleRow}>
+          <Input
+            value={prefix}
+            onChangeText={setPrefix}
+            mono
+            placeholder="/secret"
+            accessibilityLabel="New path prefix"
+          />
+          <Input
+            value={allow}
+            onChangeText={setAllow}
+            multiline
+            mono
+            placeholder={'Anyone (empty)\n203.0.113.7\n10.0.0.0/8'}
+            style={[styles.multiline, styles.spacedSmall]}
+            accessibilityLabel="New path rule IP allow list"
+          />
+          <Button
+            label="Add rule"
+            kind="secondary"
+            onPress={add}
+            busy={busy}
+            disabled={!prefix.trim()}
+            style={styles.spacedSmall}
+          />
+        </View>
+      )}
       {error ? <Hint error>{error}</Hint> : null}
     </View>
   );

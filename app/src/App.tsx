@@ -34,8 +34,9 @@ import {LoginScreen} from './screens/LoginScreen';
 import {DomainsScreen} from './screens/DomainsScreen';
 import {GroupsScreen} from './screens/GroupsScreen';
 import {RelaysScreen} from './screens/RelaysScreen';
+import {SchemaScreen} from './screens/SchemaScreen';
 import {SettingsScreen} from './screens/SettingsScreen';
-import {init, useStore, wake} from './store';
+import {init, overrideEndsAt, overrideOn, refresh, useStore, wake} from './store';
 import {Theme, ThemeProvider, useTheme} from './theme';
 
 /**
@@ -75,6 +76,7 @@ const TITLES: Record<Route['name'], string> = {
   relays: 'Relays',
   domains: 'Domains',
   groups: 'Groups',
+  schema: 'Schema',
   settings: 'Settings',
 };
 
@@ -87,13 +89,23 @@ function AppInner(): React.JSX.Element {
   const server = useStore(s => s.server);
   const deployments = useStore(s => s.deployments);
   const bridges = useStore(s => s.bridges);
+  const schema = useStore(s => s.schema);
+  // When override runs out, refetch so the locks come back (and the
+  // banner goes) without waiting for something else to refresh.
+  const overrideEnd = overrideEndsAt(schema);
+  useEffect(() => {
+    if (overrideEnd === null) return;
+    const t = setTimeout(() => refresh().catch(() => {}), Math.max(0, overrideEnd - Date.now()) + 500);
+    return () => clearTimeout(t);
+  }, [overrideEnd]);
   useEffect(() => {
     if (loaded) splashHold.release();
   }, [loaded]);
 
   const [route, setRoute] = useState<Route>({name: 'home'});
   const navigate = useCallback((next: Route) => setRoute(next), []);
-  const goBack = useCallback(() => setRoute({name: 'home'}), []);
+  // The schema screen opens from Settings, so it goes back there.
+  const goBack = useCallback(() => setRoute(r => (r.name === 'schema' ? {name: 'settings'} : {name: 'home'})), []);
 
   // Back in the foreground: refetch, and reconnect the live socket at once.
   useEffect(() => {
@@ -182,6 +194,14 @@ function AppInner(): React.JSX.Element {
           </Text>
         </View>
       )}
+      {overrideOn(schema) && overrideEnd !== null && (
+        <View style={styles.overrideBanner}>
+          <Text style={styles.overrideBannerText} numberOfLines={2}>
+            Schema override is on until {new Date(overrideEnd).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}: values the schema
+            manages can be edited.
+          </Text>
+        </View>
+      )}
 
       <View style={styles.header}>
         {/* The constellation carries on up through the header. */}
@@ -231,7 +251,8 @@ function AppInner(): React.JSX.Element {
         {route.name === 'relays' && <RelaysScreen />}
         {route.name === 'domains' && <DomainsScreen />}
         {route.name === 'groups' && <GroupsScreen />}
-        {route.name === 'settings' && <SettingsScreen />}
+        {route.name === 'schema' && <SchemaScreen />}
+        {route.name === 'settings' && <SettingsScreen onOpenSchema={() => navigate({name: 'schema'})} />}
       </View>
       {/* Modal sheets (Overlay modal), over everything. */}
       <PortalOutlet />
@@ -255,6 +276,14 @@ function makeStyles(theme: Theme) {
       borderBottomColor: theme.danger,
     },
     offlineBannerText: {color: theme.danger, fontSize: 12, fontWeight: '600', textAlign: 'center'},
+    overrideBanner: {
+      backgroundColor: theme.warningBg,
+      paddingVertical: 8,
+      paddingHorizontal: 16,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.warning,
+    },
+    overrideBannerText: {color: theme.warning, fontSize: 12, fontWeight: '600', textAlign: 'center'},
     header: {
       flexDirection: 'row',
       alignItems: 'center',

@@ -2,7 +2,8 @@
 // health carries the session token the root password was traded for.
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /** the error body, when the server sent JSON (a schema 400 lists {path, msg} problems in it) */
+  constructor(public status: number, message: string, public body: any = null) {
     super(message);
   }
 }
@@ -10,7 +11,18 @@ export class ApiError extends Error {
 /** How long an API call may take before it's given up on. */
 const REQUEST_TIMEOUT_MS = 15_000;
 
-export async function request<T>(server: string, method: string, path: string, token: string | null, body?: unknown): Promise<T> {
+/**
+ * Calls the API. body goes as JSON, or as is with a contentType (a schema
+ * document). Answers parse as JSON, or come back as text with asText.
+ */
+export async function request<T>(
+  server: string,
+  method: string,
+  path: string,
+  token: string | null,
+  body?: unknown,
+  opts: {contentType?: string; headers?: Record<string, string>; asText?: boolean} = {},
+): Promise<T> {
   // A request that never answers (a dead connection, an unreachable server)
   // fails after a while instead of holding everything waiting on it forever.
   const abort = new AbortController();
@@ -22,9 +34,10 @@ export async function request<T>(server: string, method: string, path: string, t
       method,
       headers: {
         ...(token ? {Authorization: `Bearer ${token}`} : {}),
-        ...(body !== undefined ? {'Content-Type': 'application/json'} : {}),
+        ...(body !== undefined ? {'Content-Type': opts.contentType ?? 'application/json'} : {}),
+        ...opts.headers,
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : opts.contentType ? String(body) : JSON.stringify(body),
       signal: abort.signal,
     });
     text = await res.text();
@@ -41,8 +54,9 @@ export async function request<T>(server: string, method: string, path: string, t
     // not JSON
   }
   if (!res.ok) {
-    throw new ApiError(res.status, json?.error ?? `HTTP ${res.status}`);
+    throw new ApiError(res.status, json?.error ?? `HTTP ${res.status}`, json);
   }
+  if (opts.asText) return text as T;
   return json as T;
 }
 
@@ -66,6 +80,8 @@ export interface ServerInfo {
   publicPorts: string;
   /** what the server supports beyond the base API, e.g. "email-groups"; missing from older servers */
   features?: string[];
+  /** schema document versions the server reads; missing before schemas */
+  schemaVersions?: {min: number; current: number};
 }
 
 export type Transport = 'quic' | 'websocket';
@@ -105,6 +121,7 @@ export interface Domain {
   /** public bridges named on it */
   bridges: number;
   createdAt: string;
+  managed?: Managed | null;
 }
 
 /** Whether a domain resolves to this server (compared with the admin host). */
@@ -133,6 +150,7 @@ export interface PathRule {
   ipAllowlist: string[];
   createdAt: string;
   updatedAt: string;
+  managed?: Managed | null;
 }
 
 /** A create or update; missing fields stay as they are on update. */
@@ -188,6 +206,7 @@ export interface Deployment {
   pathRules: PathRule[];
   createdAt: string;
   updatedAt: string;
+  managed?: Managed | null;
 }
 
 /** A create or update. Passwords are only sent when set ("" clears one). */
@@ -286,6 +305,7 @@ export interface Bridge {
   listenError: string;
   createdAt: string;
   updatedAt: string;
+  managed?: Managed | null;
 }
 
 export interface BridgeInput {
@@ -320,6 +340,7 @@ export interface IPGroup {
   bridges: number;
   createdAt: string;
   updatedAt: string;
+  managed?: Managed | null;
 }
 
 export interface IPGroupInput {
@@ -337,11 +358,90 @@ export interface EmailGroup {
   deployments: number;
   createdAt: string;
   updatedAt: string;
+  managed?: Managed | null;
 }
 
 export interface EmailGroupInput {
   name?: string;
   entries?: string[];
+}
+
+/**
+ * What a schema manages of a resource (null or missing: nothing). Field
+ * names are the schema document's (target_host, ip_allowlist …).
+ */
+export interface Managed {
+  revision: number;
+  /** values only the schema sets; "path_rules" is the whole list of path rules */
+  fields: string[];
+  /** per list the app may add to: the schema's own entries, which can't be removed */
+  entries: Record<string, string[]>;
+}
+
+/** A long-lived token (sma_…) for automation, like CI applying a schema. */
+export interface ApiToken {
+  id: string;
+  name: string;
+  scope: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+/** Override mode: schema-managed values can be edited by hand until `until`. */
+export interface OverrideState {
+  on: boolean;
+  until: string | null;
+  /** seconds until override ends, by the server (older servers leave it out) */
+  secondsLeft?: number;
+  /** set by the app as the status arrives: when it ends by this device's clock, in ms */
+  endsAt?: number;
+}
+
+export interface SchemaStatus {
+  /** 0: no schema has been applied */
+  revision: number;
+  appliedAt: string | null;
+  /** "admin" or "token:<name>" */
+  appliedBy: string;
+  docHash: string;
+  /** collections the schema lists in full: nothing can be added to them here */
+  strict: string[];
+  override: OverrideState;
+  versions: {min: number; current: number};
+}
+
+export interface SchemaChange {
+  field: string;
+  from: unknown;
+  to: unknown;
+}
+
+export interface SchemaOp {
+  /** adopt: an existing resource the schema takes charge of */
+  action: 'create' | 'update' | 'delete' | 'adopt';
+  kind: 'domain' | 'ip_group' | 'email_group' | 'deployment' | 'path_rule' | 'bridge';
+  key: string;
+  changes?: SchemaChange[];
+  /** changed outside the schema (override mode) since this document was applied */
+  drift?: boolean;
+}
+
+export interface SchemaPlan {
+  ops: SchemaOp[];
+  /** applying would do something (ops, or a document that manages things differently) */
+  changed: boolean;
+  creates: number;
+  updates: number;
+  deletes: number;
+  planHash: string;
+  baseRevision: number;
+  docVersion: number;
+}
+
+/** One problem with a schema document. */
+export interface SchemaProblem {
+  path: string;
+  msg: string;
 }
 
 /** /v1/status: each online relay's live state, and each public bridge's listen status on the server. */
@@ -422,4 +522,23 @@ export const api = {
     request<Bridge>(server, 'PATCH', `/v1/bridges/${id}`, token, b),
   deleteBridge: (server: string, token: string, id: string) => request<void>(server, 'DELETE', `/v1/bridges/${id}`, token),
   bridgeDns: (server: string, token: string, id: string) => request<DomainDns>(server, 'GET', `/v1/bridges/${id}/dns`, token),
+
+  apiTokens: (server: string, token: string) => request<ApiToken[]>(server, 'GET', '/v1/api-tokens', token),
+  createApiToken: (server: string, token: string, name: string) =>
+    request<{apiToken: ApiToken; token: string}>(server, 'POST', '/v1/api-tokens', token, {name, scope: 'schema'}),
+  deleteApiToken: (server: string, token: string, id: string) => request<void>(server, 'DELETE', `/v1/api-tokens/${id}`, token),
+  setOverride: (server: string, token: string, on: boolean, minutes?: number) =>
+    request<OverrideState>(server, 'PUT', '/v1/settings/schema-override', token, {on, minutes}),
+
+  schemaStatus: (server: string, token: string) => request<SchemaStatus>(server, 'GET', '/v1/schema', token),
+  schemaPlan: (server: string, token: string, doc: string) =>
+    request<SchemaPlan>(server, 'POST', '/v1/schema/plan', token, doc, {contentType: 'application/yaml'}),
+  schemaApply: (server: string, token: string, doc: string, planHash: string) =>
+    request<{applied: boolean; revision: number; plan: SchemaPlan}>(server, 'POST', '/v1/schema/apply', token, doc, {
+      contentType: 'application/yaml',
+      headers: {'X-Plan-Hash': planHash},
+    }),
+  /** applied: the last applied document as sent; else the server's state in full */
+  schemaExport: (server: string, token: string, applied: boolean) =>
+    request<string>(server, 'GET', `/v1/schema/export${applied ? '?source=applied' : ''}`, token, undefined, {asText: true}),
 };

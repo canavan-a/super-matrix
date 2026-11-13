@@ -150,6 +150,17 @@ func (a *API) updateRelay(c *gin.Context) {
 		abort(c, http.StatusBadRequest, "nothing to change")
 		return
 	}
+	// The check can't run in the transaction below: it holds the only
+	// connection.
+	if b.Slug != nil && strings.ToLower(strings.TrimSpace(*b.Slug)) != r.Slug && !a.overrideOn() {
+		if inUse, err := a.relaySlugInUse(r.ID); err != nil {
+			abort(c, http.StatusInternalServerError, "server error")
+			return
+		} else if inUse {
+			abort(c, http.StatusConflict, lockedMsg("the slug "+r.Slug+" (the schema names this relay by it)", a.owned().revision))
+			return
+		}
+	}
 	err := a.db.Transaction(func(tx *gorm.DB) error {
 		if b.Slug != nil {
 			s, err := slugFor(tx, "relays", b.Slug, r.Name, "relay", r.ID, r.Slug)

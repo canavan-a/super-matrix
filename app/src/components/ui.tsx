@@ -101,21 +101,25 @@ export function MultiChips<T extends string>({
   options,
   value,
   onChange,
+  disabled,
 }: {
   options: {value: T; label: string}[];
   value: T[];
   onChange: (v: T[]) => void;
+  /** shown but not changeable (a value the schema manages) */
+  disabled?: boolean;
 }) {
   const s = makeStyles(useTheme());
   return (
-    <View style={s.chips}>
+    <View style={[s.chips, disabled && s.disabled]}>
       {options.map(o => {
         const on = value.includes(o.value);
         return (
           <Pressable
             key={o.value}
             style={[s.chip, on && s.chipOn]}
-            onPress={() => onChange(on ? value.filter(v => v !== o.value) : [...value, o.value])}
+            onPress={() => !disabled && onChange(on ? value.filter(v => v !== o.value) : [...value, o.value])}
+            disabled={disabled}
             accessibilityRole="checkbox"
             accessibilityLabel={o.label}
             accessibilityState={{checked: on}}>
@@ -132,19 +136,24 @@ export function Chips<T extends string | number>({
   options,
   value,
   onChange,
+  disabled,
 }: {
-  options: {value: T; label: string}[];
+  /** an option with disabled can't be picked (it would change a value the schema manages) */
+  options: {value: T; label: string; disabled?: boolean}[];
   value: T;
   onChange: (v: T) => void;
+  /** shown but not changeable (a value the schema manages) */
+  disabled?: boolean;
 }) {
   const s = makeStyles(useTheme());
   return (
-    <View style={s.chips}>
+    <View style={[s.chips, disabled && s.disabled]}>
       {options.map(o => (
         <Pressable
           key={String(o.value)}
-          style={[s.chip, value === o.value && s.chipOn]}
-          onPress={() => onChange(o.value)}
+          style={[s.chip, value === o.value && s.chipOn, o.disabled && !disabled && s.disabled]}
+          onPress={() => !disabled && !o.disabled && onChange(o.value)}
+          disabled={disabled || o.disabled}
           accessibilityRole="radio"
           accessibilityState={{selected: value === o.value}}>
           <Text style={[s.chipText, value === o.value && s.chipOnText]}>{o.label}</Text>
@@ -159,11 +168,14 @@ export function ToggleRow({
   hint,
   value,
   onChange,
+  disabled,
 }: {
   label: string;
   hint?: string;
   value: boolean;
   onChange: (v: boolean) => void;
+  /** shown but not changeable (a value the schema manages) */
+  disabled?: boolean;
 }) {
   const s = makeStyles(useTheme());
   return (
@@ -172,7 +184,7 @@ export function ToggleRow({
         <Text style={s.toggleLabel}>{label}</Text>
         {hint ? <Text style={s.hint}>{hint}</Text> : null}
       </View>
-      <Switch value={value} onValueChange={onChange} accessibilityLabel={label} />
+      <Switch value={value} onValueChange={onChange} disabled={disabled} accessibilityLabel={label} />
     </View>
   );
 }

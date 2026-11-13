@@ -22,9 +22,10 @@ type emailGroupDTO struct {
 	Name    string   `json:"name"`
 	Entries []string `json:"entries"`
 	// Deployments counts the sign-in lists that include it.
-	Deployments int64     `json:"deployments"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	Deployments int64       `json:"deployments"`
+	CreatedAt   time.Time   `json:"createdAt"`
+	UpdatedAt   time.Time   `json:"updatedAt"`
+	Managed     *managedDTO `json:"managed"`
 }
 
 func (a *API) emailGroupOut(g database.EmailGroup) emailGroupDTO {
@@ -33,6 +34,7 @@ func (a *API) emailGroupOut(g database.EmailGroup) emailGroupDTO {
 	return emailGroupDTO{
 		ID: g.ID, Name: g.Name, Entries: splitAllowlist(g.Entries),
 		Deployments: nd, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt,
+		Managed: a.owned().managed(kindEmailGroup, g.ID),
 	}
 }
 
@@ -130,6 +132,9 @@ func (a *API) createEmailGroup(c *gin.Context) {
 		abort(c, http.StatusBadRequest, "bad json")
 		return
 	}
+	if !a.schemaAllowsCreate(c, collEmailGroups) {
+		return
+	}
 	now := a.now()
 	g := database.EmailGroup{ID: database.NewID(), CreatedAt: now, UpdatedAt: now}
 	if err := applyEmailGroup(&g, in); err != nil {
@@ -154,8 +159,15 @@ func (a *API) updateEmailGroup(c *gin.Context) {
 		abort(c, http.StatusBadRequest, "bad json")
 		return
 	}
+	before := *g
 	if err := applyEmailGroup(g, in); err != nil {
 		a.inputFail(c, err)
+		return
+	}
+	if !a.schemaAllowsUpdate(c, kindEmailGroup, g.ID, before.Name, g.Name, groupItem(before.Entries), groupItem(g.Entries)) {
+		return
+	}
+	if !a.schemaAllowsGroupRename(c, kindEmailGroup, g.ID, before.Name, g.Name) {
 		return
 	}
 	g.UpdatedAt = a.now()
@@ -172,6 +184,9 @@ func (a *API) updateEmailGroup(c *gin.Context) {
 func (a *API) deleteEmailGroup(c *gin.Context) {
 	g := a.findEmailGroup(c)
 	if g == nil {
+		return
+	}
+	if !a.schemaAllowsDelete(c, kindEmailGroup, g.ID, g.Name) {
 		return
 	}
 	inUse := g.Name + " is in use: take it off those sign-in lists first"

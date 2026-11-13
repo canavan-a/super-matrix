@@ -20,6 +20,7 @@ import (
 	"main/database"
 	"main/guard"
 	"main/registry"
+	"main/schema"
 	"main/static"
 	"main/tunnel"
 	"main/version"
@@ -116,8 +117,8 @@ func (a *API) Router() *gin.Engine {
 	// is authenticated by bearer token, not cookies.
 	corsConfig := cors.DefaultConfig()
 	corsConfig.AllowAllOrigins = true
-	corsConfig.AllowHeaders = []string{"Content-Type", "Authorization"}
-	corsConfig.AllowMethods = []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"}
+	corsConfig.AllowHeaders = []string{"Content-Type", "Authorization", "X-Plan-Hash"}
+	corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
 	r.Use(cors.New(corsConfig))
 
 	r.GET("/health", func(c *gin.Context) {
@@ -178,6 +179,21 @@ func (a *API) Router() *gin.Engine {
 	admin.DELETE("/bridges/:id", a.deleteBridge)
 	admin.GET("/bridges/:id/dns", a.bridgeDNS)
 
+	admin.GET("/api-tokens", a.listAPITokens)
+	admin.POST("/api-tokens", a.createAPIToken)
+	admin.DELETE("/api-tokens/:id", a.deleteAPIToken)
+	admin.GET("/settings/schema-override", a.getOverride)
+	admin.PUT("/settings/schema-override", a.putOverride)
+
+	// The declarative schema: the admin, or an API token with the schema
+	// scope (CI).
+	sch := v1.Group("/schema", a.requireScope(database.ScopeSchema))
+	sch.GET("", a.schemaStatus)
+	sch.GET("/export", a.schemaExport)
+	sch.GET("/jsonschema", a.schemaJSONSchema)
+	sch.POST("/plan", a.schemaPlan)
+	sch.POST("/apply", a.schemaApply)
+
 	return r
 }
 
@@ -200,7 +216,7 @@ func (a *API) publicURL(c *gin.Context, host string) string {
 }
 
 // serverFeatures is reported in /v1/info.
-var serverFeatures = []string{"slugs", "email-groups"}
+var serverFeatures = []string{"slugs", "email-groups", "api-tokens", "schema"}
 
 func (a *API) info(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
@@ -217,6 +233,8 @@ func (a *API) info(c *gin.Context) {
 		// app (which can be older or newer than the server) knows what to
 		// offer. Only ever added to.
 		"features": serverFeatures,
+		// schemaVersions: the schema document versions this server reads.
+		"schemaVersions": gin.H{"min": schema.MinVersion, "current": schema.CurrentVersion},
 	})
 }
 

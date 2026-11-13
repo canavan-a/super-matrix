@@ -1,6 +1,8 @@
 import React, {useState} from 'react';
 import {ScrollView, StyleSheet, Text, View} from 'react-native';
 
+import type {Managed} from '../api';
+import {ManagedBadge, useLock, useLockedEntries, useResourceLocked, useStrict} from '../components/Managed';
 import {Notice} from '../components/Notice';
 import {Button, Chips, Divider, Hint, Input, Label, Title} from '../components/ui';
 import {platformConfirm} from '../platformConfirm';
@@ -25,6 +27,7 @@ interface Group {
   deployments: number;
   /** IP groups only: public bridges that include it */
   bridges?: number;
+  managed?: Managed | null;
 }
 
 /** What differs between the kinds of group. */
@@ -36,6 +39,8 @@ interface KindSpec {
   entriesHint: string;
   /** what includes the group, in "take it off those … first" */
   lists: string;
+  /** the collection in the schema document */
+  collection: string;
   save: (id: string | null, input: {name: string; entries: string[]}) => Promise<unknown>;
   remove: (id: string) => Promise<void>;
 }
@@ -49,6 +54,7 @@ const KINDS: Record<GroupKind, KindSpec> = {
     placeholder: '203.0.113.7\n10.0.0.0/8\n2001:db8::/32',
     entriesHint: 'One address or CIDR range per line.',
     lists: 'allow lists',
+    collection: 'groups.ip',
     save: saveIPGroup,
     remove: deleteIPGroup,
   },
@@ -60,6 +66,7 @@ const KINDS: Record<GroupKind, KindSpec> = {
     placeholder: 'ann@example.com\nbob@example.com\n*@example.org',
     entriesHint: 'One address per line, or *@example.com for everyone at a domain. Taking one off signs that person out everywhere.',
     lists: 'sign-in lists',
+    collection: 'groups.email',
     save: saveEmailGroup,
     remove: deleteEmailGroup,
   },
@@ -83,6 +90,7 @@ export function GroupsScreen(): React.JSX.Element {
   const kind: GroupKind = hasEmail ? picked : 'ip';
   const spec = KINDS[kind];
   const groups: Group[] = kind === 'ip' ? ipGroups : emailGroups;
+  const strict = useStrict(spec.collection);
 
   return (
     <ScrollView style={styles.fill} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
@@ -103,8 +111,12 @@ export function GroupsScreen(): React.JSX.Element {
       )}
       <Title>New {spec.noun}</Title>
       <Hint>{spec.intro}</Hint>
-      {/* keyed by kind so switching starts a fresh form */}
-      <GroupForm key={kind} spec={spec} group={null} onError={setError} />
+      {strict ? (
+        <Hint>The schema lists every {spec.noun}: add new ones there (or turn on override in Settings).</Hint>
+      ) : (
+        // keyed by kind so switching starts a fresh form
+        <GroupForm key={kind} spec={spec} group={null} onError={setError} />
+      )}
       {error ? (
         <Notice kind="error" title="Couldn't do that">
           {error}
@@ -135,11 +147,15 @@ export function usedBy(g: Group): string {
 function GroupRow({spec, g, onError}: {spec: KindSpec; g: Group; onError: (msg: string | null) => void}) {
   const theme = useTheme();
   const styles = makeStyles(theme);
+  const pinned = useResourceLocked(g.managed);
   const [editing, setEditing] = useState(false);
 
   return (
     <View style={styles.group}>
-      <Text style={styles.name}>{g.name}</Text>
+      <View style={styles.nameRow}>
+        <Text style={styles.name}>{g.name}</Text>
+        <ManagedBadge managed={g.managed} />
+      </View>
       <Text style={styles.meta}>
         {g.entries.length} entr{g.entries.length === 1 ? 'y' : 'ies'} · {usedBy(g)}
       </Text>
@@ -152,6 +168,7 @@ function GroupRow({spec, g, onError}: {spec: KindSpec; g: Group; onError: (msg: 
           </Text>
           <View style={[styles.row, styles.spaced]}>
             <Button label="Edit" kind="secondary" onPress={() => setEditing(true)} />
+            {!pinned && (
             <Button
               label="Delete"
               kind="secondary"
@@ -164,6 +181,7 @@ function GroupRow({spec, g, onError}: {spec: KindSpec; g: Group; onError: (msg: 
                     )
               }
             />
+            )}
           </View>
         </>
       )}
@@ -187,6 +205,9 @@ function GroupForm({
   const styles = makeStyles(theme);
   const [name, setName] = useState(group?.name ?? '');
   const [entries, setEntries] = useState((group?.entries ?? []).join('\n'));
+  const pinned = useResourceLocked(group?.managed);
+  const lock = useLock(group?.managed);
+  const schemaEntries = useLockedEntries(group?.managed, 'entries');
   const [busy, setBusy] = useState(false);
 
   const save = async () => {
@@ -210,11 +231,12 @@ function GroupForm({
   return (
     <View style={styles.spaced}>
       <Label>Name</Label>
-      <Input value={name} onChangeText={setName} placeholder={spec.noun === 'IP group' ? 'Office' : 'Team'} accessibilityLabel="Group name" />
+      <Input value={name} onChangeText={setName} editable={!pinned} placeholder={spec.noun === 'IP group' ? 'Office' : 'Team'} accessibilityLabel="Group name" />
       <Label spaced>{spec.entriesLabel}</Label>
       <Input
         value={entries}
         onChangeText={setEntries}
+        editable={!lock('entries')}
         multiline
         mono
         placeholder={spec.placeholder}
@@ -225,6 +247,7 @@ function GroupForm({
         {spec.entriesHint}
         {used ? ` Saving changes the ${used} ${used === 1 ? spec.lists.replace(/s$/, '') : spec.lists} using it, at once.` : ''}
       </Hint>
+      {schemaEntries.length > 0 && <Hint>From the schema, kept whatever you change: {schemaEntries.join(', ')}.</Hint>}
       <View style={[styles.row, styles.spaced]}>
         <Button label={group ? 'Save' : 'Add group'} onPress={save} busy={busy} disabled={!name.trim() || !parseEntries(entries).length} />
         {onDone ? <Button label="Cancel" kind="secondary" onPress={onDone} /> : null}
@@ -250,6 +273,7 @@ function makeStyles(theme: Theme) {
       padding: 14,
     },
     name: {fontSize: 15, fontWeight: '700', color: theme.text},
+    nameRow: {flexDirection: 'row', alignItems: 'center', gap: 6},
     meta: {fontSize: 12, color: theme.textMuted, marginTop: 2},
     entries: {fontFamily: 'monospace', fontSize: 13, color: theme.text, marginTop: 10},
   });

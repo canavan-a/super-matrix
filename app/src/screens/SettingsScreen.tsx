@@ -4,13 +4,14 @@ import {Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View} from 're
 import {compareVersions, DowngradeBlockedError, fetchReleases, getVersionInfo, onDownloadProgress, Release, runUpdate} from '../appUpdater';
 import {isSideload} from '../distribution';
 import {InstallCard} from '../components/InstallCard';
+import {SchemaSettings} from '../components/SchemaSettings';
 import {Button, Divider, Hint, Input, Label, Title, ToggleRow} from '../components/ui';
 import {platformConfirm} from '../platformConfirm';
 import {serverLabel, setServerName, settingsStore} from '../settings';
 import {forgetServer, hasSession, showSignIn, signOut, switchServer, useStore} from '../store';
 import {THEME_OPTIONS, Theme, useThemeSetting} from '../theme';
 
-export function SettingsScreen(): React.JSX.Element {
+export function SettingsScreen({onOpenSchema}: {onOpenSchema: () => void}): React.JSX.Element {
   const {theme, themeName, setThemeName} = useThemeSetting();
   const styles = makeStyles(theme);
   const [s, setS] = useState(settingsStore.get());
@@ -164,6 +165,8 @@ export function SettingsScreen(): React.JSX.Element {
           ))}
         </>
       )}
+
+      <SchemaSettings onOpenSchema={onOpenSchema} />
 
       <Divider />
       <Title>Appearance</Title>

@@ -65,7 +65,7 @@ nix/        NixOS modules: services.supermatrix, services.supermatrix-relay and 
 deploy/     systemd units, example config and install.sh for any other Linux; k8s/ manifest
 tools/      appart: generates the logo data and launcher icons from art/
 art/        the broom (broomledger's logo) and "Super Matrix" in super-chat's lettering
-docs/       protocol.md
+docs/       protocol.md, schema.md (the declarative schema)
 release/    APK signing and the guided GitHub release (app-v* tags); client.sh builds the CLI for every platform
 ```
 
@@ -347,6 +347,24 @@ share. `SUPERMATRIX_LOCAL_ADDR` (`localApi` in the NixOS module) moves it, or
 `off` turns it off. The NixOS module puts `supermatrix-relay` on the PATH;
 `install.sh relay` puts it in `/usr/local/bin`. Details:
 [`docs/protocol.md`](docs/protocol.md#relays-managing-their-deployments).
+
+## Configuration as code
+
+Domains, IP and email groups, deployments and bridges can also be described
+in one YAML document, kept in git and applied by CI: the server shows a plan
+of what would change, then applies it all or nothing. What the document sets
+is locked in the app (an override switch in Settings unlocks it for an
+emergency), and markers hand chosen lists and fields back to the app.
+
+```sh
+supermatrix-admin schema export -server https://admin.example.com -token sma_… > supermatrix.yaml
+supermatrix-admin schema plan  -f supermatrix.yaml   # exit 2 when something would change
+supermatrix-admin schema apply -f supermatrix.yaml
+```
+
+Make the `sma_` token under Settings → API tokens; the app's Schema screen
+(Settings → Open schema) plans and applies a pasted document too. The format,
+the markers and a CI example: [`docs/schema.md`](docs/schema.md).
 
 ## The app
 

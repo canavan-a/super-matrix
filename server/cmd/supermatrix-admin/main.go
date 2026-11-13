@@ -11,10 +11,14 @@
 //	supermatrix-admin path-rules HOST add PREFIX [CIDR...]
 //	supermatrix-admin path-rules HOST set PREFIX [CIDR...]
 //	supermatrix-admin path-rules HOST remove PREFIX
+//	supermatrix-admin schema plan|apply|export [-f FILE] -server URL -token sma_…
 //
 // rate-limit and path-rules write straight to the database, like every
 // other command here: the running server only rereads it at startup, so
 // restart supermatrix-server for a change to take effect.
+//
+// schema is the exception: it talks to a running server over HTTP with an
+// API token, and its changes take effect at once.
 package main
 
 import (
@@ -36,6 +40,10 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		usage()
+	}
+	if os.Args[1] == "schema" {
+		// Over HTTP, not the database: see schema.go.
+		os.Exit(schemaCmd(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	dataDir := os.Getenv("SUPERMATRIX_DATA_DIR")
 	if dataDir == "" {
@@ -112,7 +120,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: supermatrix-admin stats | list | revoke-sessions | rate-limit HOST ... | path-rules HOST ...")
+	fmt.Fprintln(os.Stderr, "usage: supermatrix-admin stats | list | revoke-sessions | rate-limit HOST ... | path-rules HOST ... | schema plan|apply|export ...")
 	os.Exit(2)
 }
 

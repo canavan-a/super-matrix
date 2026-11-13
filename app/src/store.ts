@@ -22,7 +22,10 @@ import {
   PathRuleInput,
   Relay,
   RelayState,
+  SchemaPlan,
+  SchemaStatus,
   ServerInfo,
+  ApiToken,
 } from './api';
 import {loadSessions, saveSessions} from './keystore';
 import {normalizeServer, settingsStore} from './settings';
@@ -41,6 +44,8 @@ interface State {
   ipGroups: IPGroup[];
   /** empty against a server without email groups */
   emailGroups: EmailGroup[];
+  /** the schema's last apply and override mode; null against a server without schemas */
+  schema: SchemaStatus | null;
   /** relay id → live state; a relay missing here is offline */
   live: Record<string, RelayState>;
   /** public bridge id → "ok" or why the server can't listen on its port */
@@ -68,6 +73,7 @@ const initial: State = {
   domains: [],
   ipGroups: [],
   emailGroups: [],
+  schema: null,
   live: {},
   publicLive: {},
   loaded: false,
@@ -221,7 +227,7 @@ let refreshing: Promise<void> | null = null;
 export function refresh(): Promise<void> {
   refreshing ??= (async () => {
     try {
-      const [info, relays, deployments, bridges, domains, ipGroups, emailGroups, status] = await authed((s, t) =>
+      const [info, relays, deployments, bridges, domains, ipGroups, emailGroups, schema, status] = await authed((s, t) =>
         Promise.all([
           api.info(s, t),
           api.relays(s, t),
@@ -231,6 +237,8 @@ export function refresh(): Promise<void> {
           api.ipGroups(s, t),
           // A server from before email groups answers 404: treat it as none.
           api.emailGroups(s, t).catch((): EmailGroup[] => []),
+          // Likewise a server from before schemas.
+          api.schemaStatus(s, t).catch((): SchemaStatus | null => null),
           api.status(s, t),
         ]),
       );
@@ -243,6 +251,7 @@ export function refresh(): Promise<void> {
           domains,
           ipGroups,
           emailGroups,
+          schema: stampOverride(schema),
           live: status.relays ?? {},
           publicLive: status.public ?? {},
           loaded: true,
@@ -514,4 +523,83 @@ export async function deleteEmailGroup(id: string): Promise<void> {
 /** Whether the open server says it supports feature (see ServerInfo.features). */
 export function supports(info: ServerInfo | null | undefined, feature: string): boolean {
   return !!info?.features?.includes(feature);
+}
+
+// ---- API tokens, override mode, the schema ----
+
+export function listApiTokens(): Promise<ApiToken[]> {
+  return authed((s, t) => api.apiTokens(s, t));
+}
+
+/** Makes a schema-scoped API token; the token itself is only shown now. */
+export function createApiToken(name: string): Promise<{apiToken: ApiToken; token: string}> {
+  return authed((s, t) => api.createApiToken(s, t, name));
+}
+
+export function deleteApiToken(id: string): Promise<void> {
+  return authed((s, t) => api.deleteApiToken(s, t, id));
+}
+
+/** Turns override mode on (for minutes, default an hour) or off. */
+export async function setOverride(on: boolean, minutes?: number): Promise<void> {
+  await authed((s, t) => api.setOverride(s, t, on, minutes));
+  await refresh().catch(() => {});
+}
+
+export function planSchema(doc: string): Promise<SchemaPlan> {
+  return authed((s, t) => api.schemaPlan(s, t, doc));
+}
+
+/** Applies doc if its plan is still planHash (else a 409 with the new plan). */
+export async function applySchema(doc: string, planHash: string): Promise<{applied: boolean; revision: number}> {
+  const out = await authed((s, t) => api.schemaApply(s, t, doc, planHash));
+  await refresh().catch(() => {});
+  return out;
+}
+
+export function exportSchema(applied: boolean): Promise<string> {
+  return authed((s, t) => api.schemaExport(s, t, applied));
+}
+
+/** Whether override mode is on right now (it ends by itself at `until`). */
+/**
+ * When override mode ends, by this device's clock (null: it's off). The
+ * server's secondsLeft, counted from when the status came, is right even
+ * when the device clock isn't.
+ */
+export function overrideEndsAt(schema: SchemaStatus | null): number | null {
+  const o = schema?.override;
+  if (!o?.on || !o.until) return null;
+  return o.endsAt ?? Date.parse(o.until);
+}
+
+export function overrideOn(schema: SchemaStatus | null, now = Date.now()): boolean {
+  const end = overrideEndsAt(schema);
+  return end !== null && end > now;
+}
+
+/** Stamps when override ends by this device's clock, as it arrives. */
+function stampOverride(schema: SchemaStatus | null): SchemaStatus | null {
+  const left = schema?.override.secondsLeft;
+  if (!schema || !schema.override.on || typeof left !== 'number') return schema;
+  return {...schema, override: {...schema.override, endsAt: Date.now() + left * 1000}};
+}
+
+/**
+ * Whether the app may change field (its name in the schema document, like
+ * "target_port") of a resource with managed: not when the schema sets it,
+ * unless override mode is on.
+ */
+export function locked(managed: {fields: string[]} | null | undefined, field: string, schema: SchemaStatus | null): boolean {
+  return !!managed?.fields.includes(field) && !overrideOn(schema);
+}
+
+/** The schema's own entries of a list field, which the app can't remove (empty in override mode). */
+export function lockedEntries(managed: {entries: Record<string, string[]>} | null | undefined, field: string, schema: SchemaStatus | null): string[] {
+  return overrideOn(schema) ? [] : managed?.entries[field] ?? [];
+}
+
+/** Whether the schema lists collection in full, so nothing can be added to it here. */
+export function strictCollection(schema: SchemaStatus | null, collection: string): boolean {
+  return !!schema?.strict.includes(collection) && !overrideOn(schema);
 }

@@ -314,7 +314,7 @@ tokens, below) and `ws` needs `Authorization: Bearer sms_…`.
 |---|---|
 | `POST /v1/login {password}` | root password → `{token, expiresAt}` (30 days); 10 attempts a minute per address |
 | `POST /v1/logout` | ends this session |
-| `GET /v1/info` | admin host, base domain, TLS on/off, version, the URL relays should use, the QUIC endpoint (or null), `publicPorts` (`""` when public bridges are off), and `features`: what the server supports beyond the base API (`slugs`, `email-groups`; only ever added to, so an app can tell an older server) |
+| `GET /v1/info` | admin host, base domain, TLS on/off, version, the URL relays should use, the QUIC endpoint (or null), `publicPorts` (`""` when public bridges are off), and `features`: what the server supports beyond the base API (`slugs`, `email-groups`, `api-tokens`, `schema`; only ever added to, so an app can tell an older server), and `schemaVersions: {min, current}`, the schema document versions it reads |
 | `GET /v1/status` | live relay state: `{relays: {<id>: {online, connectedAt, remote, version, hostname, health, transport, fallback, rttMs, bytesSent, bytesReceived, packetsLost, streams, features}}, public: {<bridge id>: "ok" | "<listen error>"}}` (`public` only with public bridges on) |
 | `GET/POST /v1/relays`, `PATCH/DELETE /v1/relays/:id` | relays, each with a `slug` (its friendly ID: 1-63 lowercase letters, digits and dashes, unique; made from the name when not given on `POST`, kept when renamed; changed with `PATCH {"slug": …}`, 409 when taken), the `features` they last said they support and how many `bridges` use them; `POST` returns the token once. Deleting a relay that still has deployments or bridges is refused |
 | `POST /v1/relays/:id/rotate` | new token (shown once); the old one stops working and the relay is disconnected |
@@ -326,9 +326,22 @@ tokens, below) and `ws` needs `Authorization: Bearer sms_…`.
 | `GET /v1/bridges/:id/dns` | whether a public bridge's DNS name resolves to this server, as for domains |
 | `GET/POST /v1/ip-groups`, `GET/PATCH/DELETE /v1/ip-groups/:id` | IP groups: named sets of addresses and CIDRs (`name`, unique ignoring case; `entries`, 1 to 1000, stored normalized, so `10.0.0.5` comes back as `10.0.0.5/32`) that allow lists include by ID. Read-only: `deployments` and `bridges`, how many allow lists include it. Editing one applies to every allow list with it at once; deleting one still in use is a 409 |
 | `GET/POST /v1/email-groups`, `GET/PATCH/DELETE /v1/email-groups/:id` | email groups: named lists of people (`name`, unique ignoring case; `entries`, 1 to 1000 addresses or `*@domain` wildcards, stored lowercased) that email-code sign-in lists include by ID. Read-only: `deployments`, how many sign-in lists include it. Editing one applies to every deployment with it at once, so taking someone off signs them out of all of them; deleting one still in use is a 409 |
+| `GET/POST /v1/api-tokens {name, scope?}`, `DELETE /v1/api-tokens/:id` | API tokens (`sma_…`) for automation. `scope` is `schema` (the default and, for now, the only one): the token can use `/v1/schema/*` and nothing else. `POST` returns `{apiToken, token}`, the token shown once. Changing the root password doesn't revoke them; delete them one by one |
+| `GET/PUT /v1/settings/schema-override {on, minutes?}` | override mode: while on (for `minutes`, default 60, 1 to 10080), values the schema manages can be edited by hand. `{on, until, secondsLeft}` (`secondsLeft` so a client with a wrong clock can time the end) |
+| `/v1/schema/*` | the declarative schema (`docs/schema.md`); a session or an API token with the `schema` scope |
 
 Sessions are tied to a fingerprint of the root password, so changing the
 password file and restarting signs every app out.
+
+**Managed resources.** Once a schema is applied, deployments, path rules,
+bridges, groups and domains carry `managed`: null, or `{revision, fields,
+entries}`, what the schema sets of them (`fields`, by their name in the
+document, like `target_port`; `path_rules` for the whole list) and, per list
+the app may add to, the schema's own `entries`. A change to any of that, a
+delete, renaming the resource, adding to a collection the schema lists in
+full, or changing a relay slug the schema uses is a 409 (`… is managed by
+schema rev N …`) unless override mode is on; resending a managed value
+unchanged is fine. This applies to relays managing their deployments too.
 
 **Live status.** `GET /v1/ws` is a WebSocket. The app sends
 `{"type":"auth","token":"sms_…"}` first; the server answers with
@@ -434,6 +447,7 @@ delete | token`.
 
 SQLite at `DATA_DIR/supermatrix.db` (WAL, foreign keys), with migrations
 embedded from `server/database/migrations/sql`. Tables: `domains`, `relays`,
-`deployments`, `deployment_tokens`, `bridges`, `admin_sessions`. Every bearer secret
-(relay, session and API tokens) is 125 random bits, stored only as its
+`deployments`, `deployment_tokens`, `bridges`, `ip_groups`, `email_groups`, `path_rules`,
+`admin_sessions`, `api_tokens`, `settings`, `schema_state`, `schema_owned`. Every bearer
+secret (relay, session, deployment and API tokens) is 125 random bits, stored only as its
 SHA-256.
