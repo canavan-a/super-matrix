@@ -107,6 +107,13 @@ export interface Relay {
   features: string[];
   /** bridges that listen on it or lead to it */
   bridges: number;
+  /** Nix services: may be applied here, whether it can run them (and why not), how many are, how many fail. Missing from older servers. */
+  allowNixServices?: boolean;
+  nix?: NixReady;
+  nixServices?: number;
+  nixFailing?: number;
+  /** whether the relay can define Nix services and run them on itself with its token */
+  manageNixServices?: boolean;
 }
 
 /** A name deployments live on: "*.example.com" (each gets a subdomain) or an exact host like "status.foo.org". */
@@ -419,7 +426,7 @@ export interface SchemaChange {
 export interface SchemaOp {
   /** adopt: an existing resource the schema takes charge of */
   action: 'create' | 'update' | 'delete' | 'adopt';
-  kind: 'domain' | 'ip_group' | 'email_group' | 'deployment' | 'path_rule' | 'bridge';
+  kind: 'domain' | 'ip_group' | 'email_group' | 'deployment' | 'path_rule' | 'bridge' | 'nix_service' | 'applied_nix_service';
   key: string;
   changes?: SchemaChange[];
   /** changed outside the schema (override mode) since this document was applied */
@@ -436,6 +443,8 @@ export interface SchemaPlan {
   planHash: string;
   baseRevision: number;
   docVersion: number;
+  /** what applying goes ahead with that won't work yet (a relay that can't run Nix services now); missing from older servers */
+  warnings?: SchemaProblem[];
 }
 
 /** One problem with a schema document. */
@@ -541,4 +550,184 @@ export const api = {
   /** applied: the last applied document as sent; else the server's state in full */
   schemaExport: (server: string, token: string, applied: boolean) =>
     request<string>(server, 'GET', `/v1/schema/export${applied ? '?source=applied' : ''}`, token, undefined, {asText: true}),
+};
+
+// ---- Nix services ----
+
+/** The Nix agent's check of a relay's machine. */
+export interface NixHost {
+  ok: boolean;
+  version: string;
+  flakes: boolean;
+  daemon: boolean;
+  systemd: boolean;
+  /** e.g. x86_64-linux */
+  system: string;
+  error?: string;
+  checkedAt: string;
+}
+
+/**
+ * Whether a relay can run Nix services. step is the first check it fails
+ * (update: its relay is too old; agent: no Nix agent on its machine; host:
+ * the machine can't run them; allow: not turned on here), reason what to do.
+ */
+export interface NixReady {
+  supported: boolean;
+  agent: boolean;
+  host: NixHost | null;
+  allowed: boolean;
+  ready: boolean;
+  step: '' | 'update' | 'agent' | 'host' | 'allow';
+  reason: string;
+}
+
+export type NixRun = 'package' | 'app' | 'devshell';
+export type NixRestart = 'always' | 'on-failure' | 'no';
+export type NixPhase =
+  | 'pending'
+  | 'preparing'
+  | 'building'
+  | 'starting'
+  | 'running'
+  | 'stopping'
+  | 'stopped'
+  | 'missing-env'
+  | 'build-failed'
+  | 'start-failed'
+  | 'crashed'
+  | 'crash-loop'
+  | 'tearing-down'
+  | 'removed'
+  | 'removed-with-errors';
+
+export interface NixProgress {
+  step: 'evaluating' | 'fetching' | 'downloading' | 'building' | 'copying' | string;
+  built: number;
+  toBuild: number;
+  downloaded: number;
+  toDownload: number;
+  current?: string;
+  elapsedS: number;
+}
+
+/** A Nix service on one relay. */
+export interface AppliedNixService {
+  id: string;
+  /** "" once the service itself is deleted (while this one is torn down) */
+  nixServiceId: string;
+  relayId: string;
+  relaySlug: string;
+  relayName: string;
+  slug: string;
+  desired: 'running' | 'stopped';
+  /** merged over the service's env on this relay */
+  env: Record<string, string>;
+  removing: boolean;
+  phase: NixPhase;
+  phaseSince: string;
+  failing: boolean;
+  /** the store path running now ("" for none), and the one before it */
+  serving: string;
+  previous: string;
+  lastError: string;
+  missingEnv: string[];
+  restarts: number;
+  /** while building */
+  progress: NixProgress | null;
+  /** what's serving was built from the current definition */
+  upToDate: boolean;
+  online: boolean;
+  managed?: Managed | null;
+}
+
+/** A flake, with its files inline, and how to run it. */
+export interface NixService {
+  id: string;
+  slug: string;
+  name: string;
+  run: NixRun;
+  attr: string;
+  command: string[];
+  env: Record<string, string>;
+  relayEnv: string[];
+  restart: NixRestart;
+  removeState: boolean;
+  /** flake.nix and the others, by path (not flake.lock) */
+  files: Record<string, string>;
+  /** "" until a relay makes one */
+  flakeLock: string;
+  /** given, rather than made by a relay */
+  lockPinned: boolean;
+  /** the relay that defined it ("" for yours): it runs only there until you adopt it */
+  ownerRelayId?: string;
+  ownerRelayName?: string;
+  /** a flake.lock a relay (pendingLockFrom, its name) made, waiting for you; "" for none */
+  pendingLock?: string;
+  pendingLockFrom?: string;
+  createdAt: string;
+  updatedAt: string;
+  applied: AppliedNixService[];
+  managed?: Managed | null;
+}
+
+export interface NixServiceInput {
+  name?: string;
+  slug?: string;
+  run?: NixRun;
+  attr?: string;
+  command?: string[];
+  env?: Record<string, string>;
+  relayEnv?: string[];
+  restart?: NixRestart;
+  removeState?: boolean;
+  files?: Record<string, string>;
+  /** pins the lock; "" unpins it (the next build makes a fresh one) */
+  flakeLock?: string;
+}
+
+export interface AppliedInput {
+  relayId?: string;
+  desired?: 'running' | 'stopped';
+  env?: Record<string, string>;
+}
+
+export interface NixEvent {
+  id: number;
+  at: string;
+  kind: string;
+  message: string;
+  /** the tail of a failure's log */
+  log: string;
+}
+
+export const nixApi = {
+  services: (server: string, token: string) => request<NixService[]>(server, 'GET', '/v1/nix-services', token),
+  create: (server: string, token: string, s: NixServiceInput) => request<NixService>(server, 'POST', '/v1/nix-services', token, s),
+  update: (server: string, token: string, id: string, s: NixServiceInput) =>
+    request<NixService>(server, 'PATCH', `/v1/nix-services/${id}`, token, s),
+  remove: (server: string, token: string, id: string) => request<void>(server, 'DELETE', `/v1/nix-services/${id}`, token),
+  relock: (server: string, token: string, id: string) => request<NixService>(server, 'POST', `/v1/nix-services/${id}/relock`, token),
+  apply: (server: string, token: string, id: string, a: AppliedInput) =>
+    request<AppliedNixService>(server, 'POST', `/v1/nix-services/${id}/applied`, token, a),
+  applied: (server: string, token: string) => request<AppliedNixService[]>(server, 'GET', '/v1/applied-nix-services', token),
+  updateApplied: (server: string, token: string, aid: string, a: AppliedInput) =>
+    request<AppliedNixService>(server, 'PATCH', `/v1/applied-nix-services/${aid}`, token, a),
+  removeApplied: (server: string, token: string, aid: string) =>
+    request<void>(server, 'DELETE', `/v1/applied-nix-services/${aid}`, token),
+  action: (server: string, token: string, aid: string, action: 'restart' | 'rebuild' | 'rollback') =>
+    request<void>(server, 'POST', `/v1/applied-nix-services/${aid}/${action}`, token),
+  events: (server: string, token: string, aid: string) =>
+    request<NixEvent[]>(server, 'GET', `/v1/applied-nix-services/${aid}/events`, token),
+  /** the journal's last lines, or (build) the last build's whole log */
+  logs: (server: string, token: string, aid: string, build: boolean) =>
+    request<string>(server, 'GET', `/v1/applied-nix-services/${aid}/logs?${build ? 'build=1' : 'lines=300'}`, token, undefined, {asText: true}),
+  adopt: (server: string, token: string, id: string) => request<NixService>(server, 'POST', `/v1/nix-services/${id}/adopt`, token),
+  /** accept (or turn down) a relay's pending flake.lock */
+  decideLock: (server: string, token: string, id: string, accept: boolean) =>
+    request<NixService>(server, 'POST', `/v1/nix-services/${id}/lock`, token, {accept}),
+  setRelayManageNix: (server: string, token: string, id: string, manageNixServices: boolean) =>
+    request<Relay>(server, 'PATCH', `/v1/relays/${id}`, token, {manageNixServices}),
+  setRelayNix: (server: string, token: string, id: string, allowNixServices: boolean) =>
+    request<Relay>(server, 'PATCH', `/v1/relays/${id}`, token, {allowNixServices}),
 };

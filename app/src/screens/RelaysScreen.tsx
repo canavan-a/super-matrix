@@ -8,7 +8,7 @@ import {Notice} from '../components/Notice';
 import {Overlay} from '../components/Overlay';
 import {Button, Chips, CopyBox, Divider, Dot, Hint, Input, Label, Title, ToggleRow} from '../components/ui';
 import {platformConfirm} from '../platformConfirm';
-import {createRelay, deleteRelay, renameRelay, rotateRelay, setRelayManage, setRelaySlug, useStore} from '../store';
+import {createRelay, deleteRelay, renameRelay, rotateRelay, setRelayManage, setRelayManageNix, setRelayNix, setRelaySlug, useStore} from '../store';
 import {Theme, useTheme} from '../theme';
 
 export const REPO = 'github:canavan-a/super-matrix';
@@ -20,7 +20,7 @@ export function relayInstall(serverUrl: string, token: string): Record<InstallKi
   return {
     nixos: [
       `# flake inputs\nsuper-matrix.url = "${REPO}";`,
-      `# configuration\nimports = [ inputs.super-matrix.nixosModules.relay ];\nservices.supermatrix-relay = {\n  enable = true;\n  serverUrl = "${serverUrl}";\n  tokenFile = "/etc/supermatrix/relay-token";\n};`,
+      `# configuration\nimports = [ inputs.super-matrix.nixosModules.relay ];\nservices.supermatrix-relay = {\n  enable = true;\n  serverUrl = "${serverUrl}";\n  tokenFile = "/etc/supermatrix/relay-token";\n  # nixServices.enable = true;  # to run Nix services here (as root)\n};`,
       `# the token file (or use your secrets manager, e.g. agenix/sops)\nsudo mkdir -p /etc/supermatrix\necho '${token}' | sudo install -m 600 /dev/stdin /etc/supermatrix/relay-token`,
     ],
     systemd: [
@@ -177,6 +177,11 @@ function RelayRow({
           <Text style={styles.relayMeta} numberOfLines={1}>
             {bridgeSupport(r)}
           </Text>
+          {nixLine(r) ? (
+            <Text style={[styles.relayMeta, (r.nixFailing ?? 0) > 0 && styles.failing]} numberOfLines={1}>
+              {nixLine(r)}
+            </Text>
+          ) : null}
           {badge ? (
             <Text style={[styles.relayMeta, fallback && styles.fallback]} numberOfLines={1}>
               {badge}
@@ -251,6 +256,58 @@ function RelayRow({
               }}
             />
           </View>
+          {r.nix && (
+            <View>
+              <ToggleRow
+                label="Nix services"
+                hint={
+                  r.nix.ready
+                    ? `Nix services can run on ${hostname || r.name}: nix ${r.nix.host?.version ?? ''} on ${r.nix.host?.system ?? 'its machine'}.`
+                    : r.nix.reason
+                }
+                value={!!r.allowNixServices}
+                disabled={!r.allowNixServices && r.nix.step === 'update'}
+                onChange={on => {
+                  const apply = () => setRelayNix(r.id, on).catch(fail);
+                  if (!on) {
+                    apply();
+                    return;
+                  }
+                  platformConfirm(
+                    `Run Nix services on ${r.name}?`,
+                    `Nix services you apply to ${r.name} run as root on ${hostname || 'its machine'}. Anyone who can sign in here (or apply a schema) can then run programs there. Its machine also needs the Nix agent running.`,
+                    'Allow',
+                    apply,
+                    false,
+                  );
+                }}
+              />
+              <ToggleRow
+                label="Manage its Nix services"
+                hint={
+                  r.manageNixServices
+                    ? `As root on ${hostname || r.name}, supermatrix-relay nix create/apply/remove defines Nix services and runs them there (only there, and only its own).`
+                    : `Lets root on ${hostname || r.name} define Nix services and run them on ${r.name}, with the supermatrix-relay CLI and the relay's token.`
+                }
+                value={!!r.manageNixServices}
+                disabled={!r.manageNixServices && r.nix.step === 'update'}
+                onChange={on => {
+                  const apply = () => setRelayManageNix(r.id, on).catch(fail);
+                  if (!on) {
+                    apply();
+                    return;
+                  }
+                  platformConfirm(
+                    `Let ${r.name} manage its Nix services?`,
+                    `Root on ${hostname || 'its machine'} can then define Nix services and run them there as root, without you. It can't touch your services or run anything on other relays.`,
+                    'Allow',
+                    apply,
+                    false,
+                  );
+                }}
+              />
+            </View>
+          )}
           <View style={[styles.row, styles.spaced]}>
             <Button
               label="New token"
@@ -352,6 +409,7 @@ function makeStyles(theme: Theme) {
     relayName: {fontSize: 15, fontWeight: '700', color: theme.text},
     relayMeta: {fontSize: 12, color: theme.textMuted, marginTop: 2},
     fallback: {color: theme.warning},
+    failing: {color: theme.danger},
     relayBody: {
       paddingHorizontal: 14,
       paddingBottom: 14,
@@ -386,4 +444,24 @@ export function bridgeSupport(r: Relay): string {
   if (tcp && udp) return 'Bridges: TCP and UDP';
   if (tcp || udp) return `Bridges: ${tcp ? 'TCP' : 'UDP'} only`;
   return r.lastSeenAt ? 'No bridges: update this relay' : 'Bridges: once it has connected';
+}
+
+/** Whether the relay can run Nix services (null against a server without them). */
+export function nixLine(r: Relay): string | null {
+  const n = r.nix;
+  if (!n) return null;
+  const count = r.nixServices
+    ? ` · ${r.nixServices} here${r.nixFailing ? `, ${r.nixFailing} failing` : ''}`
+    : '';
+  if (n.ready) return `Nix services: on · nix ${n.host?.version ?? '?'}${count}`;
+  switch (n.step) {
+    case 'update':
+      return r.lastSeenAt ? 'Nix services: update this relay first' : 'Nix services: once it has connected';
+    case 'agent':
+      return `Nix services: no Nix agent on its machine${count}`;
+    case 'host':
+      return `Nix services: its machine can't run them${count}`;
+    default:
+      return 'Nix services: off';
+  }
 }

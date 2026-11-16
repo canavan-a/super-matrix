@@ -58,7 +58,7 @@ const (
 func BridgeFeature(p string) string { return "bridge-" + p }
 
 // Features is what this build of the relay supports.
-var Features = []string{FeatureBridgeTCP, FeatureBridgeUDP}
+var Features = []string{FeatureBridgeTCP, FeatureBridgeUDP, FeatureNix}
 
 // Hello is what a relay says about itself when it connects.
 type Hello struct {
@@ -70,6 +70,8 @@ type Hello struct {
 	// Features is what the relay supports beyond deployments (e.g.
 	// "bridge-tcp"); relays from before bridges send none.
 	Features []string `json:"features,omitempty"`
+	// Nix is the Nix agent's host check, on relays with nix-services.
+	Nix *NixHost `json:"nix,omitempty"`
 }
 
 // HasFeature reports whether the hello listed f.
@@ -120,20 +122,32 @@ type QUICEndpoint struct {
 //	server → relay  {"type":"listeners","listeners":[…]}
 //	relay → server  {"type":"hello","hello":{…}}
 //	relay → server  {"type":"health","health":{"<deployment or bridge>":"ok"|"<error>"}}
+//
+// and the Nix service messages (see nix.go).
 type Control struct {
-	Type      string            `json:"type"`
-	Targets   []Target          `json:"targets,omitempty"`
-	Listeners []Listener        `json:"listeners,omitempty"`
-	Hello     *Hello            `json:"hello,omitempty"`
-	Health    map[string]string `json:"health,omitempty"`
+	Type        string               `json:"type"`
+	Targets     []Target             `json:"targets,omitempty"`
+	Listeners   []Listener           `json:"listeners,omitempty"`
+	Hello       *Hello               `json:"hello,omitempty"`
+	Health      map[string]string    `json:"health,omitempty"`
+	NixServices []NixService         `json:"nixServices,omitempty"`
+	NixStatus   map[string]NixStatus `json:"nixStatus,omitempty"`
+	NixLock     *NixLock             `json:"nixLock,omitempty"`
+	NixAction   *NixAction           `json:"nixAction,omitempty"`
+	// NixKnown (relay → server, type nixKnown) is every applied service
+	// the relay's agent still manages, sent after it takes a new set.
+	NixKnown []string `json:"nixKnown,omitempty"`
 }
 
 // StreamHeader opens a data stream. The server names a deployment or
 // bridge target in Deployment; a relay opening a stream for one of its
-// listeners names the bridge in Bridge.
+// listeners names the bridge in Bridge. NixLogs (server → relay) asks for
+// an applied Nix service's logs, which follow the reply as text.
 type StreamHeader struct {
-	Deployment string `json:"d,omitempty"`
-	Bridge     string `json:"b,omitempty"`
+	Deployment string   `json:"d,omitempty"`
+	Bridge     string   `json:"b,omitempty"`
+	NixLogs    string   `json:"nixLogs,omitempty"`
+	Logs       *NixLogs `json:"logs,omitempty"`
 }
 
 // StreamReply answers a StreamHeader; an empty Error means the target is
@@ -195,12 +209,16 @@ func readLine(r io.Reader, v any) error {
 	return errors.New("tunnel: header line too long")
 }
 
+// MaxControlLine bounds one control message; nixServices carries every
+// applied service's flake files inline.
+const MaxControlLine = 32 << 20
+
 // lineReader reads newline-delimited JSON from a stream that stays JSON.
 type lineReader struct{ s *bufio.Scanner }
 
 func newLineReader(r io.Reader) *lineReader {
 	s := bufio.NewScanner(r)
-	s.Buffer(make([]byte, 64<<10), 4<<20)
+	s.Buffer(make([]byte, 64<<10), MaxControlLine)
 	return &lineReader{s: s}
 }
 

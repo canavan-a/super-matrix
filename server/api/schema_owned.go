@@ -27,6 +27,9 @@ const (
 	kindDeployment = "deployment"
 	kindPathRule   = "path_rule"
 	kindBridge     = "bridge"
+	kindNixService = "nix_service"
+	// kindAppliedNix is a Nix service on one relay.
+	kindAppliedNix = "applied_nix_service"
 	// kindCollection rows (resource_id a collection below) mark a
 	// collection the schema lists in full: nothing can be added to it.
 	kindCollection = "collection"
@@ -39,6 +42,7 @@ const (
 	collEmailGroups = "groups.email"
 	collDeployments = "deployments"
 	collBridges     = "bridges"
+	collNixServices = "nix_services"
 )
 
 type resKey struct{ kind, id string }
@@ -242,6 +246,10 @@ func (a *API) relaySlugInUse(id string) (bool, error) {
 		return n > 0, err
 	}
 	err = a.db.Model(&database.Bridge{}).Where("(from_relay_id = ? OR to_relay_id = ?) AND "+owned, id, id, kindBridge).Count(&n).Error
+	if err != nil || n > 0 {
+		return n > 0, err
+	}
+	err = a.db.Model(&database.AppliedNixService{}).Where("relay_id = ? AND removing = 0 AND "+owned, id, kindAppliedNix).Count(&n).Error
 	return n > 0, err
 }
 

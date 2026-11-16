@@ -10,4 +10,7 @@ export type Route =
   | {name: 'domains'}
   | {name: 'groups'}
   | {name: 'schema'}
+  | {name: 'nix'}
+  | {name: 'nixService'; id: string | null}
+  | {name: 'appliedNix'; id: string}
   | {name: 'settings'};

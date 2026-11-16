@@ -25,6 +25,8 @@ const KIND: Record<SchemaOp['kind'], string> = {
   deployment: 'deployment',
   path_rule: 'path rule',
   bridge: 'bridge',
+  nix_service: 'Nix service',
+  applied_nix_service: 'Nix service on',
 };
 
 const VERB: Record<SchemaOp['action'], string> = {
@@ -267,6 +269,11 @@ export function SchemaScreen(): React.JSX.Element {
                 </Text>
               ))}
             </View>
+          ))}
+          {plan.warnings?.map(w => (
+            <Text key={w.path + w.msg} style={styles.drift}>
+              {w.path}: {w.msg}
+            </Text>
           ))}
           {plan.changed && (
             <View style={styles.row}>

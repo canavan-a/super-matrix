@@ -62,6 +62,10 @@ type API struct {
 	tokenSeen map[string]time.Time
 
 	// certRetried is when each host's certificate was last retried by hand.
+	// nixProgress is applied Nix service ID → *tunnel.NixProgress while it
+	// builds (kept in memory only).
+	nixProgress sync.Map
+
 	certMu      sync.Mutex
 	certRetried map[string]time.Time
 }
@@ -79,6 +83,10 @@ func New(db *gorm.DB, cfg config.Config, reg *registry.Registry, hub *tunnel.Hub
 	hub.OnChange = func(string) { a.broadcastStatus() }
 	hub.OnHello = a.onHello
 	hub.OnBridge = a.onBridge
+	hub.NixFor = a.nixSetFor
+	hub.OnNixStatus = a.onNixStatus
+	hub.OnNixLock = a.onNixLock
+	hub.OnNixKnown = a.onNixKnown
 	go a.statusTicker()
 	return a
 }
@@ -185,6 +193,8 @@ func (a *API) Router() *gin.Engine {
 	admin.GET("/settings/schema-override", a.getOverride)
 	admin.PUT("/settings/schema-override", a.putOverride)
 
+	a.nixRoutes(v1, admin)
+
 	// The declarative schema: the admin, or an API token with the schema
 	// scope (CI).
 	sch := v1.Group("/schema", a.requireScope(database.ScopeSchema))
@@ -193,6 +203,9 @@ func (a *API) Router() *gin.Engine {
 	sch.GET("/jsonschema", a.schemaJSONSchema)
 	sch.POST("/plan", a.schemaPlan)
 	sch.POST("/apply", a.schemaApply)
+	// What the Nix services the schema puts on relays are doing (CI waits
+	// on it after an apply).
+	sch.GET("/nix-status", a.listApplied)
 
 	return r
 }
@@ -216,7 +229,7 @@ func (a *API) publicURL(c *gin.Context, host string) string {
 }
 
 // serverFeatures is reported in /v1/info.
-var serverFeatures = []string{"slugs", "email-groups", "api-tokens", "schema"}
+var serverFeatures = []string{"slugs", "email-groups", "api-tokens", "schema", "nix-services"}
 
 func (a *API) info(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{

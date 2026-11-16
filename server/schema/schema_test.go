@@ -47,6 +47,12 @@ func TestParseMarkers(t *testing.T) {
 	if d.Groups.Email.Get("team").Entries.Spread || !d.Groups.IP.Get("office").Entries.Spread {
 		t.Fatal("group spreads")
 	}
+	k := d.NixServices.Get("uptime-kuma")
+	if !d.NixServices.Spread || k == nil || !k.Relays.Spread || k.Flake.Content != "{ outputs = { self }: { }; }\n" ||
+		k.FlakeLock.Content != `{"version":7}` || (*k.Files)["config/app.json"] != "{}" || *k.Teardown.RemoveState ||
+		*k.Relays.Get("pi").Desired != "stopped" || (*k.Relays.Get("pi").Env)["PORT"] != "3002" || !slices.Equal(k.Relays.Get("pi").UI, []string{"desired"}) {
+		t.Fatalf("nix service: %+v", k)
+	}
 	// Round trip through YAML keeps everything.
 	y, err := d.YAML()
 	if err != nil {

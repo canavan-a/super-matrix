@@ -29,10 +29,20 @@ type relayDTO struct {
 	Deployments int64      `json:"deployments"`
 	// ManageDeployments: the relay can manage its own deployments.
 	ManageDeployments bool `json:"manageDeployments"`
+	// ManageNixServices: the relay can define Nix services and run them on
+	// itself with its token.
+	ManageNixServices bool `json:"manageNixServices"`
 	// Features is what the relay said it supports when it last connected.
 	Features []string `json:"features"`
 	// Bridges counts the bridges that listen on or lead to this relay.
 	Bridges int64 `json:"bridges"`
+	// AllowNixServices: Nix services may be applied to it. Nix is whether
+	// it can run them (see nix_ready.go); NixServices counts those applied
+	// to it, NixFailing those failing.
+	AllowNixServices bool        `json:"allowNixServices"`
+	Nix              nixReadyDTO `json:"nix"`
+	NixServices      int64       `json:"nixServices"`
+	NixFailing       int64       `json:"nixFailing"`
 }
 
 func (a *API) relayOut(r database.Relay, online map[string]tunnel.RelayState) relayDTO {
@@ -44,12 +54,16 @@ func (a *API) relayOut(r database.Relay, online map[string]tunnel.RelayState) re
 	if r.Features != "" {
 		feats = strings.Split(r.Features, ",")
 	}
+	var nn, nf int64
+	a.db.Model(&database.AppliedNixService{}).Where("relay_id = ? AND removing = 0", r.ID).Count(&nn)
+	a.db.Model(&database.AppliedNixService{}).Where("relay_id = ? AND phase IN ?", r.ID, tunnel.FailedPhases).Count(&nf)
 	_, on := online[r.ID]
 	return relayDTO{
 		ID: r.ID, Name: r.Name, Slug: r.Slug, CreatedAt: r.CreatedAt, LastSeenAt: r.LastSeenAt, LastIP: r.LastIP,
 		Version: r.Version, Hostname: r.Hostname, Online: on, Deployments: n,
-		Transport: r.Transport, Fallback: r.Fallback, ManageDeployments: r.ManageDeployments,
+		Transport: r.Transport, Fallback: r.Fallback, ManageDeployments: r.ManageDeployments, ManageNixServices: r.ManageNixServices,
 		Features: feats, Bridges: nb,
+		AllowNixServices: r.AllowNixServices, Nix: nixReadiness(r), NixServices: nn, NixFailing: nf,
 	}
 }
 
@@ -128,6 +142,8 @@ func (a *API) updateRelay(c *gin.Context) {
 		Name              *string `json:"name"`
 		Slug              *string `json:"slug"`
 		ManageDeployments *bool   `json:"manageDeployments"`
+		AllowNixServices  *bool   `json:"allowNixServices"`
+		ManageNixServices *bool   `json:"manageNixServices"`
 	}
 	if err := c.ShouldBindJSON(&b); err != nil {
 		abort(c, http.StatusBadRequest, "bad json")
@@ -145,6 +161,31 @@ func (a *API) updateRelay(c *gin.Context) {
 	if b.ManageDeployments != nil {
 		r.ManageDeployments = *b.ManageDeployments
 		upd["manage_deployments"] = r.ManageDeployments
+	}
+	if b.ManageNixServices != nil {
+		r.ManageNixServices = *b.ManageNixServices
+		upd["manage_nix_services"] = r.ManageNixServices
+	}
+	nixToggled := false
+	if b.AllowNixServices != nil && *b.AllowNixServices != r.AllowNixServices {
+		if *b.AllowNixServices {
+			// Turning it on for a relay that can't carry them would only
+			// fail later, so say now what to update.
+			if rd := nixReadiness(*r); rd.Step == nixStepUpdate {
+				abort(c, http.StatusConflict, rd.Reason)
+				return
+			}
+		} else {
+			var n int64
+			a.db.Model(&database.AppliedNixService{}).Where("relay_id = ? AND removing = 0", r.ID).Count(&n)
+			if n > 0 {
+				abort(c, http.StatusConflict, "remove the Nix services on "+r.Name+" first")
+				return
+			}
+		}
+		r.AllowNixServices = *b.AllowNixServices
+		upd["allow_nix_services"] = r.AllowNixServices
+		nixToggled = true
 	}
 	if len(upd) == 0 && b.Slug == nil {
 		abort(c, http.StatusBadRequest, "nothing to change")
@@ -177,6 +218,9 @@ func (a *API) updateRelay(c *gin.Context) {
 		return
 	}
 	a.changed()
+	if nixToggled {
+		a.nixChanged()
+	}
 	c.JSON(http.StatusOK, a.relayOut(*r, a.hub.State()))
 }
 
@@ -194,6 +238,13 @@ func (a *API) deleteRelay(c *gin.Context) {
 	a.db.Model(&database.Bridge{}).Where("from_relay_id = ? OR to_relay_id = ?", r.ID, r.ID).Count(&n)
 	if n > 0 {
 		abort(c, http.StatusConflict, "delete this relay's bridges first")
+		return
+	}
+	// Ones being torn down go with it (cascade); the rest have to be
+	// removed first, so they're torn down on the machine.
+	a.db.Model(&database.AppliedNixService{}).Where("relay_id = ? AND removing = 0", r.ID).Count(&n)
+	if n > 0 {
+		abort(c, http.StatusConflict, "remove this relay's Nix services first")
 		return
 	}
 	a.db.Delete(r)
@@ -303,7 +354,7 @@ func (a *API) serveRelay(r *database.Relay, ip string, in *tunnel.Incoming) {
 func (a *API) onHello(relayID string, h tunnel.Hello, _ string) {
 	a.db.Model(&database.Relay{}).Where("id = ?", relayID).Updates(map[string]any{
 		"version": cleanName(h.Version), "hostname": cleanName(h.Hostname), "fallback": clip(h.Fallback, 300),
-		"features": clip(strings.Join(h.Features, ","), 300),
+		"features": clip(strings.Join(h.Features, ","), 300), "nix_host": nixHostJSON(h.Nix),
 	})
 	a.watchers.send(gin.H{"type": "changed"})
 }

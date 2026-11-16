@@ -55,6 +55,18 @@ const FIELD_LABEL: Record<string, string> = {
   domain: 'domain',
   subdomain: 'subdomain',
   entries: 'entries',
+  run: 'how it runs',
+  attr: 'output',
+  command: 'command',
+  env: 'environment',
+  relay_env: 'relay env',
+  restart: 'restart policy',
+  teardown: 'teardown',
+  flake: 'flake.nix',
+  flake_lock: 'flake.lock',
+  files: 'files',
+  relays: 'relays',
+  desired: 'running or stopped',
 };
 
 export const fieldLabel = (f: string): string =>

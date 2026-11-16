@@ -34,6 +34,14 @@ type Relay struct {
 	// Features is what the relay said it supports in its last hello,
 	// comma-separated (e.g. "bridge-tcp,bridge-udp").
 	Features string
+	// AllowNixServices lets Nix services be applied to the relay; its
+	// machine must run the Nix agent too. NixHost is the agent's last host
+	// check (tunnel.NixHost as JSON, "" for none).
+	AllowNixServices bool
+	// ManageNixServices lets the relay apply the Nix services it defined to
+	// itself, and manage them there, with its token.
+	ManageNixServices bool
+	NixHost           string
 }
 
 // HasFeature reports whether the relay's last hello listed f.
@@ -369,3 +377,73 @@ type SchemaOwned struct {
 }
 
 func (SchemaOwned) TableName() string { return "schema_owned" }
+
+// NixService is a flake, with its files inline, and how to run it. It runs
+// on the relays it's applied to (AppliedNixService).
+type NixService struct {
+	ID   string `gorm:"primaryKey"`
+	Slug string
+	Name string
+	// Run is package | app | devshell; Attr picks the output.
+	Run  string
+	Attr string
+	// Command is a JSON array (the program and its arguments; [] for the
+	// output's own), Env a JSON object. RelayEnv is newline-separated
+	// names that must be set on each relay.
+	Command     string
+	Env         string
+	RelayEnv    string `gorm:"column:relay_env"`
+	Restart     string
+	RemoveState bool
+	// Files is a JSON object of path → content (flake.nix and others, not
+	// flake.lock). FlakeLock is the lock: given when LockPinned, otherwise
+	// the one the first relay to build made ("" until then).
+	Files      string
+	FlakeLock  string
+	LockPinned bool
+	// OwnerRelayID is the relay that defined it (nil: the admin's or the
+	// schema's); it runs only there until adopted.
+	OwnerRelayID *string
+	// PendingLock is a flake.lock a relay (PendingLockFrom) made, waiting to
+	// be accepted.
+	PendingLock     string
+	PendingLockFrom string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// AppliedNixService is a NixService on one relay. Removing marks one the
+// relay is tearing down; it's deleted once the relay confirms.
+type AppliedNixService struct {
+	ID string `gorm:"primaryKey"`
+	// NixServiceID is nil once the service is deleted (while this one is
+	// torn down); Slug keeps its name.
+	NixServiceID *string
+	RelayID      string
+	Slug         string
+	Desired      string
+	// Env is a JSON object merged over the service's.
+	Env      string
+	Removing bool
+	// Phase and the rest are what the relay last reported.
+	Phase      string
+	PhaseSince time.Time
+	Serving    string
+	Previous   string
+	BuildHash  string
+	LastError  string
+	MissingEnv string
+	Restarts   int
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// NixServiceEvent is one entry in an applied service's history.
+type NixServiceEvent struct {
+	ID        int64 `gorm:"primaryKey"`
+	AppliedID string
+	At        time.Time
+	Kind      string
+	Message   string
+	Log       string
+}

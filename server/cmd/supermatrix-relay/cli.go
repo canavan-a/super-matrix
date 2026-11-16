@@ -21,6 +21,8 @@ import (
 const cliUsage = `supermatrix-relay %s
 
   supermatrix-relay [run]                       run the relay (and its local API on %s)
+  supermatrix-relay nix-agent                   run the Nix agent (as root): builds and runs the
+                                                Nix services the app applies to this relay
 
 Manage this relay's deployments (turn on "Manage its deployments" for the
 relay in the app first). These talk to the running relay's local API:
@@ -37,6 +39,10 @@ relay in the app first). These talk to the running relay's local API:
   supermatrix-relay token create HOST|ID NAME [--expires 30d]   prints the token once
   supermatrix-relay token delete HOST|ID TOKEN_ID
   supermatrix-relay version
+
+This relay's own Nix services (as root; "Manage its Nix services" on in the app):
+
+  supermatrix-relay nix list | create | apply | …   see supermatrix-relay nix help
 
 TARGET is http://host:port, https://host:port or ssh://host:port.
 
@@ -82,6 +88,8 @@ func cli(args []string) int {
 		err = cmdSetEnabled(rest, true)
 	case "disable":
 		err = cmdSetEnabled(rest, false)
+	case "nix":
+		err = cmdNix(rest)
 	case "token":
 		err = cmdToken(rest)
 	case "version", "--version":

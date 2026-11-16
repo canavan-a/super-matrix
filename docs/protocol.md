@@ -443,11 +443,200 @@ else that can run programs on the machine can use it. The same binary is its
 CLI: `supermatrix-relay status | domains | list | get | create | update |
 delete | token`.
 
+## Relays managing their Nix services
+
+Like deployments, a relay can manage Nix services of its own once **Manage
+its Nix services** is on for it (`PATCH /v1/relays/:id
+{"manageNixServices": true}`; off by default, and separate from managing
+deployments, since these run as root on its machine). With its token it can
+then define Nix services, apply them to itself, and run, change and remove
+them there:
+
+| | |
+|---|---|
+| `GET/POST /v1/relay/nix-services`, `GET/PATCH/DELETE /v1/relay/nix-services/:id` | its own services (id or slug) |
+| `POST /v1/relay/nix-services/:id/relock` | drop the lock |
+| `POST /v1/relay/nix-services/:id/applied` | apply it to itself (no body needed) |
+| `GET /v1/relay/applied-nix-services`, `GET/PATCH/DELETE …/:aid`, `POST …/:aid/restart \| rebuild \| rollback`, `GET …/:aid/events`, `GET …/:aid/logs` | as the admin routes, for its own services on itself |
+
+Everything answers 403 while the permission is off. What a relay defines is
+its own (`ownerRelayId`): only it and the admin see it, it runs only on that
+relay (`relayId` naming any other is a 403, and the admin applying it
+elsewhere a 409), and its locks are taken as they come. A relay never sees or
+touches the admin's services, including ones applied to it. **Adopting** one
+(`POST /v1/nix-services/:id/adopt`, or a schema listing it) makes it the
+admin's: it can then run anywhere, and the relay can no longer change it. A
+relay's services go with the relay when it's deleted. A schema that lists
+`nix_services` in full refuses new ones, as for deployments.
+
+**On the relay's machine.** These routes are never on the relay's local API
+(which has no auth). `supermatrix-relay nix list | show | create | update |
+delete | apply | remove | start | stop | restart | rebuild | rollback | logs`
+reads the relay's token from its root-only file (`SUPERMATRIX_RELAY_TOKEN_FILE`,
+by default `/etc/supermatrix/relay-token`; the NixOS module sets it) and
+talks to the server directly, so it takes root, the same as what it runs.
+`create SLUG --dir DIR --apply` sends a flake's directory (as `source:` does
+for the schema) and runs it at once.
+
+## Nix services
+
+A **Nix service** is a flake, kept inline on the server (`flake.nix`,
+`flake.lock` and any other files), and how to run it. **Applying** it to a
+relay makes an **applied Nix service**: the relay's machine builds the flake
+and runs it as a systemd unit, `smx-<slug>.service`.
+
+**Trust.** This is the one feature where the server can run code on a
+relay's machine: units run as root, so whoever controls the server can run
+anything on a machine that allows Nix services. The rest of the relay's
+promise above (it only dials targets it was given) doesn't hold there. So it
+takes two opt-ins: the machine's owner runs the **Nix agent**
+(`services.supermatrix-relay.nixServices.enable`, or `install.sh relay
+--nix-services`), and the admin turns on **Nix services** for the relay in
+the app.
+
+**The agent.** `supermatrix-relay nix-agent` runs as a root service of its
+own, listening on `/run/supermatrix-nix/agent.sock` (mode 0660, group
+`supermatrix-nix`, which the relay's service is in). The relay stays
+unprivileged and only passes messages between the server and the socket. The
+agent keeps its state in `/var/lib/supermatrix-nix/state.json`, so services
+keep running, and come back after a reboot, while the relay or the server is
+away. Restarting the agent or the relay leaves the services running.
+
+### Whether a relay can run them
+
+`GET /v1/relays` gives each relay `nix`: `{supported, agent, host, allowed,
+ready, step, reason}`, from its last hello (so it holds while it's offline).
+The checks, in order (`step` is the first that fails, `reason` what to do):
+
+| `step` | Check |
+|---|---|
+| `update` | the relay's hello lists the `nix` feature: every build that can carry Nix services does. An older relay has to be updated first (and can't have Nix services turned on). |
+| `agent` | it also lists `nix-services`: the agent on its machine answered. The relay lists it only while connected to the agent, and says hello again when that changes. |
+| `host` | the agent's host check passed (`host`: `{ok, version, flakes, daemon, systemd, system, error, checkedAt}`): Nix with flakes (the agent turns `nix-command flakes` on itself), a reachable store, systemd as init. Checked at start and every 5 minutes. |
+| `allow` | Nix services are on for the relay: `PATCH /v1/relays/:id {"allowNixServices": true}`. |
+
+A service can only be applied (in the app, the API or a schema) to a relay
+that passes all four (`ready`); otherwise the answer is a 409 with `reason`.
+A service already on a relay that stops passing (its agent went away) stays,
+and a plan says so as a warning. Turning Nix services off, or deleting the
+relay, is refused while services are applied to it.
+
+### Messages
+
+On the control stream, besides the ones above:
+
+```
+relay → server  hello.features += "nix", "nix-services"; hello.nix = {ok, version, system, …}
+server → relay  {"type":"nixServices","nixServices":[{id, slug, run, attr, command, env, relayEnv, restart, removeState, files, lock, lockPinned, desired}]}
+relay → server  {"type":"nixStatus","nixStatus":{"<applied id>":{phase, since, serving, previous, buildHash, error, log, missingEnv, exitCode, restarts, progress, event}}}
+relay → server  {"type":"nixLock","nixLock":{id, base, lock}}
+relay → server  {"type":"nixKnown","nixKnown":["<applied id>", …]}
+server → relay  {"type":"nixAction","nixAction":{id, action: "restart" | "rebuild" | "rollback"}}
+```
+
+`nixServices` is the full set, sent on connect and on every change, like
+`targets`: the service with the relay's `env` merged over its own. The agent
+tears down what's no longer in it. After each set it reports every service's
+status and `nixKnown`, the full list of what it manages; the server forgets
+applied services being removed that the agent never had. Status reports come
+in the order the agent made them (each phase change, and build progress at
+most once a second). A control line can be up to 32 MiB.
+
+Logs are a data stream the server opens with `{"nixLogs":"<applied id>",
+"logs":{lines, follow, build}}`: the relay answers `{}` and then the
+journal's last `lines` lines (following when `follow`), or with `build` the
+last build's full log, as text.
+
+### Building and running
+
+The agent writes the files to `/var/lib/supermatrix-nix/src/<id>/<hash>/`
+and builds `path:<dir>#<output>`:
+
+| `run` | Output | Runs |
+|---|---|---|
+| `package` (default) | `packages.<system>.<attr>` | `command`, or the package's `meta.mainProgram` (a lone program in `bin/` otherwise) |
+| `app` | `apps.<system>.<attr>.program` | the app's program, or `command` |
+| `devshell` | `devShells.<system>.<attr>` | `command`, inside the shell's environment (`nix print-dev-env`), from the flake's directory |
+
+A program without a slash is in the output's `bin/`; with one, relative to
+the output. Each build gets a GC root in `/var/lib/supermatrix-nix/gcroots/`,
+and the previous build keeps its root, for rollback. The unit has
+`StateDirectory=smx/<slug>` (`/var/lib/smx/<slug>`, its working directory
+except for dev shells), the service's `env`, then
+`EnvironmentFile=-/etc/supermatrix/nix-services/<slug>.env`, which is the
+machine owner's to write and never sent to the server. `relay_env` names
+variables that must be set there: until they are, the service waits in
+`missing-env`.
+
+**Locks.** A service without a `flake.lock` is locked by a relay when it
+builds it, which sends it back (`nixLock`, `base` the hash of the lock it was
+given). For a relay's own service (see below) the server takes it at once.
+For anyone else's it's held as **pending** (`pendingLock`, `pendingLockFrom`)
+until it's accepted, `POST /v1/nix-services/:id/lock {"accept": true}` (or
+turned down, `false`): one relay can't change what the others run. The first
+waits; later ones are ignored until it's decided. Until then each relay keeps
+the lock it made for itself. Accepted, every relay builds with it. A lock
+that was given (`lockPinned`) is used as is and never replaced, so pinning
+one skips all this. `POST /v1/nix-services/:id/relock` drops the lock (and
+any pending one), so the next build locks every input afresh.
+
+**What changes do.** The agent tracks a hash of what a build depends on
+(files, lock, `run`, `attr`). A change rebuilds; a build that gives the same
+store path and command doesn't restart anything. A change to `command`,
+`env`, `relay_env` or `restart` only rewrites the unit and restarts it. A
+failed build leaves the old version running (`build-failed`), and isn't
+retried until the definition changes or a rebuild is asked for. A rolled back
+service stays on the previous build until its definition changes.
+
+### Phases
+
+`pending` (not picked up yet) → `preparing` → `building` (with `progress`:
+`{step, built, toBuild, downloaded, toDownload, current, elapsedS}`, from
+Nix's `--log-format internal-json`; while it builds, the old version keeps
+`serving`) → `starting` (up 5 s) → `running`; `stopping` → `stopped` for
+`desired: stopped`. Failures: `missing-env`, `build-failed`, `start-failed`,
+`crashed` (it exited and systemd restarted it), `crash-loop` (more than 5
+restarts in 2 minutes). A crash, start failure or failed build carries the
+error and the tail of its log. Removing goes `tearing-down` → `removed` or
+`removed-with-errors`, which lists the steps that failed.
+
+**Teardown**, step by step, each tried even when one fails: stop the unit,
+delete it and reload systemd, delete the GC roots, the flake and the build
+logs, and with `remove_state` (the default) `/var/lib/smx/<slug>`. The
+relay's `<slug>.env` stays. The server keeps the applied service (as
+`removing`, phase `tearing-down`) until the relay confirms, so one removed
+while its relay is offline is torn down when it reconnects. Deleting one that's
+already being removed forgets it at once.
+
+Each applied service keeps its last 50 **events** (`applied`, `building`,
+`build-ok`, `build-failed`, `started`, `crashed`, `locked`, `rolled-back`, …),
+with the log tail of failures.
+
+### API
+
+| | |
+|---|---|
+| `GET/POST /v1/nix-services`, `GET/PATCH/DELETE /v1/nix-services/:id` (id or slug) | Nix services, each with `applied` (where it runs) and `managed` |
+| `POST /v1/nix-services/:id/relock` | drop the lock |
+| `POST /v1/nix-services/:id/lock {accept}` | accept or turn down a relay's pending lock |
+| `POST /v1/nix-services/:id/adopt` | make a relay's own service yours (it can then run anywhere; the relay can no longer change it) |
+| `POST /v1/nix-services/:id/applied {relayId, desired?, env?}` | apply it to a relay (id or slug) |
+| `GET /v1/applied-nix-services[?relayId=]`, `GET/PATCH/DELETE /v1/applied-nix-services/:aid` | applied services: `{desired, env}` can change; DELETE tears it down |
+| `POST /v1/applied-nix-services/:aid/restart \| rebuild \| rollback` | 409 when the relay is offline |
+| `GET /v1/applied-nix-services/:aid/events` | its history, newest first |
+| `GET /v1/applied-nix-services/:aid/logs?lines=200` (or `?build=1`) | the journal (or the last build log) as text, from the relay |
+| `GET /v1/nix-logs/:aid?lines=200` | a WebSocket that follows the journal; the first message is `{"type":"auth","token":…}`, as for `/v1/ws` |
+| `GET /v1/schema/nix-status` | the applied services, with an API token (CI waits on it) |
+
+`/v1/ws` also sends `{"type":"nixStatus","relayId":…,"applied":[…]}` as
+relays report.
+
 ## Storage
 
 SQLite at `DATA_DIR/supermatrix.db` (WAL, foreign keys), with migrations
 embedded from `server/database/migrations/sql`. Tables: `domains`, `relays`,
 `deployments`, `deployment_tokens`, `bridges`, `ip_groups`, `email_groups`, `path_rules`,
-`admin_sessions`, `api_tokens`, `settings`, `schema_state`, `schema_owned`. Every bearer
+`admin_sessions`, `api_tokens`, `settings`, `schema_state`, `schema_owned`,
+`nix_services`, `applied_nix_services`, `nix_service_events`. Every bearer
 secret (relay, session, deployment and API tokens) is 125 random bits, stored only as its
 SHA-256.

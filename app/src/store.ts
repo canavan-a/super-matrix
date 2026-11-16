@@ -26,6 +26,12 @@ import {
   SchemaStatus,
   ServerInfo,
   ApiToken,
+  AppliedInput,
+  AppliedNixService,
+  NixEvent,
+  NixService,
+  NixServiceInput,
+  nixApi,
 } from './api';
 import {loadSessions, saveSessions} from './keystore';
 import {normalizeServer, settingsStore} from './settings';
@@ -44,6 +50,8 @@ interface State {
   ipGroups: IPGroup[];
   /** empty against a server without email groups */
   emailGroups: EmailGroup[];
+  /** empty against a server without Nix services */
+  nixServices: NixService[];
   /** the schema's last apply and override mode; null against a server without schemas */
   schema: SchemaStatus | null;
   /** relay id → live state; a relay missing here is offline */
@@ -73,6 +81,7 @@ const initial: State = {
   domains: [],
   ipGroups: [],
   emailGroups: [],
+  nixServices: [],
   schema: null,
   live: {},
   publicLive: {},
@@ -227,7 +236,7 @@ let refreshing: Promise<void> | null = null;
 export function refresh(): Promise<void> {
   refreshing ??= (async () => {
     try {
-      const [info, relays, deployments, bridges, domains, ipGroups, emailGroups, schema, status] = await authed((s, t) =>
+      const [info, relays, deployments, bridges, domains, ipGroups, emailGroups, schema, status, nixServices] = await authed((s, t) =>
         Promise.all([
           api.info(s, t),
           api.relays(s, t),
@@ -240,6 +249,8 @@ export function refresh(): Promise<void> {
           // Likewise a server from before schemas.
           api.schemaStatus(s, t).catch((): SchemaStatus | null => null),
           api.status(s, t),
+          // And one from before Nix services.
+          nixApi.services(s, t).catch((): NixService[] => []),
         ]),
       );
       if (state.phase === 'ready')
@@ -252,6 +263,7 @@ export function refresh(): Promise<void> {
           ipGroups,
           emailGroups,
           schema: stampOverride(schema),
+          nixServices,
           live: status.relays ?? {},
           publicLive: status.public ?? {},
           loaded: true,
@@ -408,6 +420,9 @@ function connect() {
     if (msg.type === 'status') {
       backoff = 1000;
       set({live: msg.relays ?? {}, publicLive: msg.public ?? {}, connected: true});
+    } else if (msg.type === 'nixStatus' && Array.isArray(msg.applied)) {
+      // Phases and build progress as relays report them, without a refetch.
+      set({nixServices: mergeApplied(state.nixServices, msg.applied)});
     } else if (msg.type === 'changed') {
       // Several changes tend to land together; refetch once.
       if (refetchTimer) clearTimeout(refetchTimer);
@@ -602,4 +617,110 @@ export function lockedEntries(managed: {entries: Record<string, string[]>} | nul
 /** Whether the schema lists collection in full, so nothing can be added to it here. */
 export function strictCollection(schema: SchemaStatus | null, collection: string): boolean {
   return !!schema?.strict.includes(collection) && !overrideOn(schema);
+}
+
+// ---- Nix services ----
+
+/** services with each of updates put in place of the applied service it is. */
+export function mergeApplied(services: NixService[], updates: AppliedNixService[]): NixService[] {
+  const byId = new Map(updates.map(u => [u.id, u]));
+  return services.map(s =>
+    s.applied.some(a => byId.has(a.id)) ? {...s, applied: s.applied.map(a => byId.get(a.id) ?? a)} : s,
+  );
+}
+
+export async function saveNixService(id: string | null, input: NixServiceInput): Promise<NixService> {
+  const out = await authed((s, t) => (id ? nixApi.update(s, t, id, input) : nixApi.create(s, t, input)));
+  await refresh().catch(() => {});
+  return out;
+}
+
+export async function deleteNixService(id: string): Promise<void> {
+  await authed((s, t) => nixApi.remove(s, t, id));
+  await refresh().catch(() => {});
+}
+
+/** Drops the flake.lock: the next relay to build locks every input afresh. */
+export async function relockNixService(id: string): Promise<void> {
+  await authed((s, t) => nixApi.relock(s, t, id));
+  await refresh().catch(() => {});
+}
+
+export async function applyNixService(id: string, relayId: string): Promise<AppliedNixService> {
+  const out = await authed((s, t) => nixApi.apply(s, t, id, {relayId}));
+  await refresh().catch(() => {});
+  return out;
+}
+
+export async function updateApplied(aid: string, input: AppliedInput): Promise<void> {
+  await authed((s, t) => nixApi.updateApplied(s, t, aid, input));
+  await refresh().catch(() => {});
+}
+
+/** Tears it down on its relay (or, when it's already being removed, forgets it). */
+export async function removeApplied(aid: string): Promise<void> {
+  await authed((s, t) => nixApi.removeApplied(s, t, aid));
+  await refresh().catch(() => {});
+}
+
+export function appliedAction(aid: string, action: 'restart' | 'rebuild' | 'rollback'): Promise<void> {
+  return authed((s, t) => nixApi.action(s, t, aid, action));
+}
+
+export function appliedEvents(aid: string): Promise<NixEvent[]> {
+  return authed((s, t) => nixApi.events(s, t, aid));
+}
+
+export function appliedLogs(aid: string, build: boolean): Promise<string> {
+  return authed((s, t) => nixApi.logs(s, t, aid, build));
+}
+
+export async function setRelayNix(id: string, on: boolean): Promise<void> {
+  await authed((s, t) => nixApi.setRelayNix(s, t, id, on));
+  await refresh().catch(() => {});
+}
+
+/**
+ * Follows an applied service's journal over a WebSocket: onText gets each
+ * chunk, onEnd why it stopped. Returns a function that stops it.
+ */
+export function followLogs(aid: string, onText: (t: string) => void, onEnd: (why: string) => void): () => void {
+  const {server, token} = state;
+  if (!server || !token || typeof WebSocket === 'undefined') {
+    onEnd('Live logs need a connection to the server');
+    return () => {};
+  }
+  let stopped = false;
+  const sock = new WebSocket(server.replace(/^http/, 'ws') + `/v1/nix-logs/${aid}?lines=200`);
+  sock.onopen = () => sock.send(JSON.stringify({type: 'auth', token}));
+  sock.onmessage = e => onText(String(e.data));
+  sock.onclose = e => {
+    if (!stopped) onEnd(e.reason || (e.code === 1000 ? 'The log ended' : 'Disconnected'));
+  };
+  return () => {
+    stopped = true;
+    sock.close();
+  };
+}
+
+/** Every applied service, with its service, for the relays and lists. */
+export function allApplied(services: NixService[]): {service: NixService; applied: AppliedNixService}[] {
+  return services.flatMap(service => service.applied.map(applied => ({service, applied})));
+}
+
+/** Makes a relay's Nix service yours: it can then run on any relay, and the relay can't change it. */
+export async function adoptNixService(id: string): Promise<void> {
+  await authed((s, t) => nixApi.adopt(s, t, id));
+  await refresh().catch(() => {});
+}
+
+/** Accepts (or turns down) the flake.lock a relay made for the service. */
+export async function decideNixLock(id: string, accept: boolean): Promise<void> {
+  await authed((s, t) => nixApi.decideLock(s, t, id, accept));
+  await refresh().catch(() => {});
+}
+
+export async function setRelayManageNix(id: string, on: boolean): Promise<void> {
+  await authed((s, t) => nixApi.setRelayManageNix(s, t, id, on));
+  await refresh().catch(() => {});
 }

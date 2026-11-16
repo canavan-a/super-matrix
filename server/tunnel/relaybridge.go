@@ -14,10 +14,15 @@ type activeListener struct {
 }
 
 func (r *Relay) features() []string {
+	f := Features
 	if r.Features != nil {
-		return r.Features
+		f = r.Features
 	}
-	return Features
+	// nix-services is only listed while the agent answers.
+	if r.Nix != nil && r.Nix.Host() != nil && slices.Contains(f, FeatureNix) {
+		f = append(append([]string{}, f...), FeatureNixServices)
+	}
+	return f
 }
 
 func (r *Relay) setLink(l link) {

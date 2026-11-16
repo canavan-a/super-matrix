@@ -40,3 +40,25 @@ bridges:
     listen_port: 25565
     to_relay: homelab
     target_host: 10.0.0.7
+nix_services:
+  "...": true
+  uptime-kuma:
+    name: Uptime Kuma
+    run: package
+    command: [uptime-kuma-server, --port, "3001"]
+    env: {PORT: "3001"}
+    relay_env: [DB_PASSWORD]
+    restart: on-failure
+    teardown: {remove_state: false}
+    flake: |
+      { outputs = { self }: { }; }
+    flake_lock: '{"version":7}'
+    files:
+      config/app.json: "{}"
+    relays:
+      "...": true
+      homelab: {}
+      pi:
+        env: {PORT: "3002"}
+        desired: stopped
+        ui: [desired]

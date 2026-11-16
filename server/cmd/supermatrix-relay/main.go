@@ -8,6 +8,7 @@
 //	SUPERMATRIX_TRANSPORT=auto        auto (QUIC, else the WebSocket) | quic | websocket
 //	SUPERMATRIX_QUIC_ADDR=host:port   optional; overrides the QUIC address the server advertises
 //	SUPERMATRIX_LOCAL_ADDR=127.0.0.1:3388   the local API ("off" turns it off)
+//	SUPERMATRIX_NIX_SOCKET=/run/supermatrix-nix/agent.sock   the Nix agent ("off": no Nix services)
 //
 // While it runs, the relay also serves a local API on 127.0.0.1:3388 with
 // no auth, which passes requests on to the server with the relay's token.
@@ -26,11 +27,16 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"main/nixagent"
 	"main/tunnel"
 	"main/version"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "nix-agent" {
+		runNixAgent()
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] != "run" {
 		os.Exit(cli(os.Args[1:]))
 	}
@@ -76,7 +82,16 @@ func run() {
 		}()
 	}
 
-	r := &tunnel.Relay{ServerURL: serverURL, Token: token, Version: version.Version,
+	// Nix services, when this machine runs the Nix agent (it's looked for
+	// all along: starting it later turns them on).
+	var nix tunnel.NixAgent
+	if sock := nixSocket(); sock != "off" {
+		c := nixagent.NewClient(sock, log.Printf)
+		go c.Run(ctx)
+		nix = c
+	}
+
+	r := &tunnel.Relay{ServerURL: serverURL, Token: token, Version: version.Version, Nix: nix,
 		Transport: transport, QUICAddr: os.Getenv("SUPERMATRIX_QUIC_ADDR")}
 	_ = r.Run(ctx)
 }
