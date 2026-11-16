@@ -23,6 +23,13 @@ wherever the services run. No open ports at home, no third party in the path.
   on the laptop, a game server, syslog, DNS. Or it opens a port on the server
   itself, to the internet (a public bridge). Same relay links, nothing new to
   open between relays.
+- **Nix services: the server can run things too.** Define a flake once
+  (inline, or a directory in your schema's repo), apply it to relays, and each
+  relay's machine builds it and runs it as a systemd unit, with per-relay env,
+  live build progress, logs, crash detection, rollback, and teardown when you
+  remove it. It's opt-in twice: the machine runs the Nix agent, and the relay
+  has Nix services turned on in the app. The app tells you which relays are
+  ready, and why not. Details: [`docs/protocol.md`](docs/protocol.md#nix-services).
 - **Any number of domains.** Wildcard ones (`*.example.com`, each deployment
   picks a subdomain) and exact ones (`status.foo.org`), managed in the app.
 - **A certificate per deployment.** Point a wildcard DNS record at the server
@@ -130,6 +137,7 @@ services.supermatrix-relay = {
   serverUrl = "https://matrix.example.com";
   tokenFile = "/etc/supermatrix/relay-token";
   # transport = "websocket";  # default "auto": QUIC, else the WebSocket
+  # nixServices.enable = true;  # run Nix services here (as root; see docs/protocol.md)
 };
 ```
 
@@ -151,6 +159,7 @@ sudo systemctl enable --now supermatrix-server
 
 # on each relay machine
 sudo deploy/install.sh relay smr_…       # the token from the app
+# sudo deploy/install.sh relay --nix-services   # also the Nix agent, to run Nix services (needs nix)
 sudoedit /etc/supermatrix/relay.env      # SUPERMATRIX_SERVER_URL
 sudo systemctl enable --now supermatrix-relay
 ```

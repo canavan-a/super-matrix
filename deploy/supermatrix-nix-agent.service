@@ -1,0 +1,29 @@
+# Super Matrix Nix agent: builds and runs the Nix services the app applies
+# to this relay, each as a unit of its own (smx-<slug>.service). Installed by
+# deploy/install.sh relay --nix-services.
+#
+# It runs as root: anything in the supermatrix-nix group (the relay) can have
+# it run programs, and so can whoever controls the Super Matrix server.
+# Each service's own variables go in /etc/supermatrix/nix-services/<slug>.env.
+[Unit]
+Description=Super Matrix Nix agent
+After=network-online.target nix-daemon.service
+Wants=network-online.target
+Before=supermatrix-relay.service
+
+[Service]
+ExecStart=/usr/local/bin/supermatrix-relay nix-agent
+Environment=SUPERMATRIX_NIX_GROUP=supermatrix-nix
+Environment=PATH=/nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# The socket's directory: root and the relay's group only.
+Group=supermatrix-nix
+RuntimeDirectory=supermatrix-nix
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+StateDirectory=supermatrix-nix
+StateDirectoryMode=0700
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -60,6 +60,9 @@ type schemaPlanOut struct {
 	PlanHash     string `json:"planHash"`
 	BaseRevision int    `json:"baseRevision"`
 	DocVersion   int    `json:"docVersion"`
+	// Warnings: what applying goes ahead with that won't work yet (a
+	// relay that can't run Nix services now, say).
+	Warnings schema.Errors `json:"warnings"`
 }
 
 type planner struct {
@@ -71,8 +74,10 @@ type planner struct {
 	// same: the document is the one last applied, so updates are drift.
 	same bool
 
-	own      []database.SchemaOwned
-	ops      []schemaOp
+	own []database.SchemaOwned
+	ops []schemaOp
+	// warnings are things an apply goes ahead with that won't work yet.
+	warnings schema.Errors
 	errs     schema.Errors
 	internal error
 }
@@ -98,6 +103,8 @@ func (a *API) runSchema(tx *gorm.DB, doc *schema.Document, docHash string) (*pla
 		p.deleteUndeclaredDeployments,
 		p.deployments,
 		p.bridges,
+		p.deleteUndeclaredNixServices,
+		p.nixServices,
 		func() { p.deleteUndeclaredGroups(kindIPGroup) },
 		func() { p.deleteUndeclaredGroups(kindEmailGroup) },
 		p.deleteUndeclaredDomains,
@@ -112,7 +119,10 @@ func (a *API) runSchema(tx *gorm.DB, doc *schema.Document, docHash string) (*pla
 }
 
 func (p *planner) result(base int) *schemaPlanOut {
-	out := &schemaPlanOut{Ops: p.ops, BaseRevision: base, DocVersion: p.doc.From}
+	out := &schemaPlanOut{Ops: p.ops, BaseRevision: base, DocVersion: p.doc.From, Warnings: p.warnings}
+	if out.Warnings == nil {
+		out.Warnings = schema.Errors{}
+	}
 	if out.Ops == nil {
 		out.Ops = []schemaOp{}
 	}
@@ -224,6 +234,10 @@ func diff(before, after any, skip ...string) []schemaChange {
 		if strings.HasSuffix(k, "_password") {
 			// Hashes aren't secrets, but they're noise in a plan.
 			ch.From, ch.To = maskHash(b[k]), maskHash(a[k])
+		}
+		if k == "flake" || k == "flake_lock" || k == "files" {
+			// Whole files: their digests say what changed, briefly.
+			ch.From, ch.To = digestFiles(b[k]), digestFiles(a[k])
 		}
 		out = append(out, ch)
 	}

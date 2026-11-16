@@ -22,6 +22,7 @@ import {
   Server,
   Settings,
   Shield,
+  Snowflake,
   Trash2,
   TriangleAlert,
   X,
@@ -51,7 +52,8 @@ export type IconName =
   | 'mail'
   | 'bridge'
   | 'network'
-  | 'code';
+  | 'code'
+  | 'snowflake';
 
 const ICONS: Record<IconName, LucideIcon> = {
   gear: Settings,
@@ -77,6 +79,7 @@ const ICONS: Record<IconName, LucideIcon> = {
   bridge: Cable,
   network: Network,
   code: FileCode,
+  snowflake: Snowflake,
   'power-off': PowerOff,
 };
 

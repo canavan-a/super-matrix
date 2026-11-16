@@ -4,6 +4,8 @@
 #   sudo deploy/install.sh server          # server + web app (needs go, npm)
 #   sudo deploy/install.sh server --no-web # server only (needs go)
 #   sudo deploy/install.sh relay [TOKEN]   # relay (needs go); TOKEN from the app
+#   sudo deploy/install.sh relay [TOKEN] --nix-services
+#                                          # and the Nix agent, to run Nix services (needs nix)
 #   sudo deploy/install.sh client          # the supermatrix CLI for SSH deployments (needs go)
 #   sudo deploy/install.sh forward NAME HOST [--listen ADDR] [TOKEN]
 #                                          # a service keeping a local port open to HOST
@@ -21,7 +23,7 @@ die() { echo "error: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 is required ($2)"; }
 
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo)"
-usage="usage: install.sh server [--no-web] | relay [TOKEN] | client | forward NAME HOST [--listen ADDR] [TOKEN]"
+usage="usage: install.sh server [--no-web] | relay [TOKEN] [--nix-services] | client | forward NAME HOST [--listen ADDR] [TOKEN]"
 [ $# -ge 1 ] || die "$usage"
 need go "https://go.dev/dl/, 1.26+"
 need systemctl "systemd"
@@ -94,19 +96,46 @@ server)
   ;;
 
 relay)
+  token="" nixsvc=0
+  shift
+  for a in "$@"; do
+    case "$a" in
+    --nix-services) nixsvc=1 ;;
+    -*) die "$usage" ;;
+    *) token="$a" ;;
+    esac
+  done
+  if [ "$nixsvc" = 1 ]; then
+    need nix "https://nixos.org/download, with the daemon (multi-user install)"
+    [ -d /run/systemd/system ] || die "Nix services need systemd as the init system"
+  fi
   build supermatrix-relay
   udp_buffers
   if [ ! -f "$etc/relay.env" ]; then
     install -m 0644 "$repo/deploy/relay.env.example" "$etc/relay.env"
     fresh_env=1
   fi
-  if [ -n "${2:-}" ]; then
+  if [ -n "$token" ]; then
     umask 077
-    printf '%s\n' "$2" > "$etc/relay-token"
+    printf '%s\n' "$token" > "$etc/relay-token"
     chmod 0600 "$etc/relay-token"
   fi
   [ -f "$etc/relay-token" ] || echo "Put the relay token from the app in $etc/relay-token (or re-run with it)."
   install -m 0644 "$repo/deploy/supermatrix-relay.service" /etc/systemd/system/
+  if [ "$nixsvc" = 1 ]; then
+    getent group supermatrix-nix >/dev/null || groupadd --system supermatrix-nix
+    install -m 0644 "$repo/deploy/supermatrix-nix-agent.service" /etc/systemd/system/
+    install -d -m 0755 /etc/systemd/system/supermatrix-relay.service.d
+    printf '# Installed by deploy/install.sh relay --nix-services: the relay may use the Nix agent.\n[Service]\nSupplementaryGroups=supermatrix-nix\n' \
+      > /etc/systemd/system/supermatrix-relay.service.d/nix-services.conf
+    install -d -m 0700 "$etc/nix-services"
+    systemctl daemon-reload
+    systemctl enable supermatrix-nix-agent >/dev/null 2>&1 || true
+    systemctl restart supermatrix-nix-agent
+    echo "Nix agent running. Each Nix service's own variables go in $etc/nix-services/<slug>.env."
+    echo "It runs services as root: whoever controls your Super Matrix server can run programs here."
+    echo "Turn on Nix services for this relay in the app (Relays) to use it."
+  fi
   systemctl daemon-reload
   if [ "${fresh_env:-0}" = 1 ]; then
     echo "Set SUPERMATRIX_SERVER_URL in $etc/relay.env, then:"

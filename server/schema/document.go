@@ -20,6 +20,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"reflect"
 	"strconv"
 	"strings"
@@ -48,7 +49,51 @@ type Document struct {
 	Groups      *Groups          `json:"groups,omitempty" desc:"Named lists that allow lists and sign-in lists include by name."`
 	Deployments *Map[Deployment] `json:"deployments,omitempty" desc:"Deployments by hostname. \"...\": true keeps deployments added in the app."`
 	Bridges     *Map[Bridge]     `json:"bridges,omitempty" desc:"Bridges by slug. \"...\": true keeps bridges added in the app."`
+	NixServices *Map[NixService] `json:"nix_services,omitempty" desc:"Nix services by slug: a flake the relays they're applied to build and run. \"...\": true keeps Nix services added in the app."`
 }
+
+// NixService is a flake, inline, and how to run it, keyed by its slug.
+type NixService struct {
+	Name     *string            `json:"name,omitempty" since:"1" desc:"Display name; the slug by default."`
+	Run      *string            `json:"run,omitempty" since:"1" enum:"package,app,devshell" default:"package" desc:"What to run: a package's program, an app, or a command inside a dev shell."`
+	Attr     *string            `json:"attr,omitempty" since:"1" default:"default" desc:"The output's name: packages.<system>.<attr>, apps.<system>.<attr> or devShells.<system>.<attr>."`
+	Command  *[]string          `json:"command,omitempty" since:"1" desc:"The program and its arguments (relative to the output for package). Required for devshell; left out, the package's main program or the app's."`
+	Env      *map[string]string `json:"env,omitempty" since:"1" desc:"Environment variables."`
+	RelayEnv *[]string          `json:"relay_env,omitempty" since:"1" desc:"Variables each relay must set in /etc/supermatrix/nix-services/<slug>.env; the service doesn't start without them."`
+	Restart  *string            `json:"restart,omitempty" since:"1" enum:"always,on-failure,no" default:"always"`
+	Teardown *NixTeardown       `json:"teardown,omitempty" since:"1" desc:"What removing the service from a relay deletes."`
+	// Flake and FlakeLock are inline; supermatrix-admin turns {file: …}
+	// and source: into them before sending a document.
+	Flake     *Text              `json:"flake,omitempty" since:"1" desc:"flake.nix, inline."`
+	FlakeLock *Text              `json:"flake_lock,omitempty" since:"1" desc:"flake.lock, inline: pins the inputs. Left out, the first relay to build the flake makes one, and every relay uses it."`
+	Files     *map[string]string `json:"files,omitempty" since:"1" desc:"Other files next to flake.nix, by path."`
+	// Source is only read by supermatrix-admin, which inlines it.
+	Source *string                 `json:"source,omitempty" key:"true" desc:"A directory with flake.nix (flake.lock and other files too), relative to this document. supermatrix-admin schema plan|apply -f reads it into flake, flake_lock and files."`
+	Relays *Map[AppliedNixService] `json:"relays,omitempty" since:"1" desc:"The relays it runs on, by slug. \"...\": true keeps relays it was applied to in the app."`
+	UI     []string                `json:"ui,omitempty" desc:"Fields the app manages; a value given for one is only used on create."`
+}
+
+// NixTeardown is what removing a Nix service from a relay deletes besides
+// the service itself.
+type NixTeardown struct {
+	RemoveState *bool `json:"remove_state,omitempty" default:"true" desc:"Also delete the service's state directory, /var/lib/smx/<slug>."`
+}
+
+// AppliedNixService is a Nix service on one relay, keyed by the relay's
+// slug.
+type AppliedNixService struct {
+	Env     *map[string]string `json:"env,omitempty" since:"1" desc:"Variables merged over the service's env on this relay."`
+	Desired *string            `json:"desired,omitempty" since:"1" enum:"running,stopped" default:"running"`
+	UI      []string           `json:"ui,omitempty" desc:"Fields the app manages; a value given for one is only used on create."`
+}
+
+// Text is a file's contents, inline. A {file: path} in its place is a
+// reference only supermatrix-admin resolves.
+type Text struct {
+	Content string
+}
+
+func (t Text) MarshalJSON() ([]byte, error) { return json.Marshal(t.Content) }
 
 // Groups are the named lists.
 type Groups struct {

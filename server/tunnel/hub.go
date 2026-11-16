@@ -32,6 +32,15 @@ type Hub struct {
 	// bridge, and if so where it leads: the relay that reaches its target
 	// and its protocol. Without it, relays can't open streams.
 	OnBridge func(fromRelay, bridgeID string) (toRelay, protocol string, err error)
+	// NixFor is the Nix services a relay should run, sent when it connects
+	// (to relays with nix-services).
+	NixFor func(relayID string) []NixService
+	// OnNixStatus and OnNixLock take a relay's Nix service reports.
+	OnNixStatus func(relayID string, status map[string]NixStatus)
+	OnNixLock   func(relayID string, lock NixLock)
+	// OnNixKnown takes the full list of applied services a relay's agent
+	// manages, so ones it never had can stop waiting for its teardown.
+	OnNixKnown func(relayID string, known []string)
 }
 
 type session struct {
@@ -54,6 +63,8 @@ type session struct {
 	// sent the part its features allow (see filtered).
 	targets   []Target
 	listeners []Listener
+	// nix is the full set of Nix services last pushed.
+	nix []NixService
 	// pushMu keeps pushes in order, so an older set never lands last.
 	pushMu sync.Mutex
 }
@@ -80,6 +91,8 @@ type RelayState struct {
 	Streams int64 `json:"streams"`
 	// Features is what the relay said it supports (e.g. "bridge-tcp").
 	Features []string `json:"features"`
+	// Nix is the Nix agent's host check (nil without one).
+	Nix *NixHost `json:"nix"`
 }
 
 func NewHub() *Hub { return &Hub{sessions: map[string]*session{}} }
@@ -134,6 +147,22 @@ func (h *Hub) Serve(relayID, remote string, in *Incoming, targets []Target, list
 	old := h.sessions[relayID]
 	h.sessions[relayID] = s
 	h.mu.Unlock()
+	// The Nix set is read once the session is registered: any change after
+	// this is pushed to it (PushNix), so none falls in between. Under
+	// pushMu, so a push can't interleave with setting it.
+	if h.NixFor != nil {
+		s.pushMu.Lock()
+		set := h.NixFor(relayID)
+		s.stateMu.Lock()
+		s.nix = set
+		s.stateMu.Unlock()
+		err := s.pushNixLocked()
+		s.pushMu.Unlock()
+		if err != nil {
+			// The read loop below then ends, and the session is cleaned up.
+			s.link.Close()
+		}
+	}
 	if old != nil {
 		go old.drain()
 	}
@@ -186,6 +215,19 @@ func (h *Hub) Serve(relayID, remote string, in *Incoming, targets []Target, list
 					go h.OnHello(relayID, *m.Hello, remote)
 				}
 				h.changed(relayID)
+			}
+		case "nixStatus":
+			// In order, on this goroutine: phases must land as they happened.
+			if h.OnNixStatus != nil && s.has(FeatureNixServices) && len(m.NixStatus) > 0 {
+				h.OnNixStatus(relayID, m.NixStatus)
+			}
+		case "nixLock":
+			if h.OnNixLock != nil && s.has(FeatureNixServices) && m.NixLock != nil {
+				h.OnNixLock(relayID, *m.NixLock)
+			}
+		case "nixKnown":
+			if h.OnNixKnown != nil && s.has(FeatureNixServices) {
+				h.OnNixKnown(relayID, m.NixKnown)
 			}
 		case "health":
 			s.stateMu.Lock()
@@ -277,10 +319,24 @@ func (s *session) push() error {
 	if err := s.send(Control{Type: "targets", Targets: ts}); err != nil {
 		return err
 	}
-	if !s.has(FeatureBridgeTCP) && !s.has(FeatureBridgeUDP) {
+	if s.has(FeatureBridgeTCP) || s.has(FeatureBridgeUDP) {
+		if err := s.send(Control{Type: "listeners", Listeners: nonNilL(ls)}); err != nil {
+			return err
+		}
+	}
+	return s.pushNixLocked()
+}
+
+// pushNixLocked sends the Nix services, to relays that run them; pushMu
+// is held.
+func (s *session) pushNixLocked() error {
+	if !s.has(FeatureNixServices) {
 		return nil
 	}
-	return s.send(Control{Type: "listeners", Listeners: nonNilL(ls)})
+	s.stateMu.Lock()
+	set := s.nix
+	s.stateMu.Unlock()
+	return s.send(Control{Type: "nixServices", NixServices: set})
 }
 
 // drain closes a replaced session once its last proxied connection ends
@@ -334,6 +390,61 @@ func (h *Hub) Push(relayID string, targets []Target, listeners []Listener) {
 	}
 }
 
+// PushNix sends a relay the full set of Nix services it should run, if
+// it's online (it gets them on connect otherwise, from NixFor).
+func (h *Hub) PushNix(relayID string, set []NixService) {
+	s := h.get(relayID)
+	if s == nil {
+		return
+	}
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	s.stateMu.Lock()
+	s.nix = set
+	s.stateMu.Unlock()
+	if err := s.pushNixLocked(); err != nil {
+		s.link.Close()
+	}
+}
+
+// ErrNoNix means the relay is online but doesn't run Nix services.
+var ErrNoNix = errors.New("this relay doesn't run Nix services (no Nix agent on its machine)")
+
+// SendNixAction asks a relay to restart, rebuild or roll back one of its
+// applied Nix services.
+func (h *Hub) SendNixAction(relayID string, act NixAction) error {
+	s := h.get(relayID)
+	if s == nil {
+		return ErrOffline
+	}
+	if !s.has(FeatureNixServices) {
+		return ErrNoNix
+	}
+	return s.send(Control{Type: "nixAction", NixAction: &act})
+}
+
+// OpenNixLogs opens a stream of an applied Nix service's logs on its
+// relay; the caller reads text from it until it ends (or closes it).
+func (h *Hub) OpenNixLogs(ctx context.Context, relayID, appliedID string, req NixLogs) (net.Conn, error) {
+	s := h.get(relayID)
+	if s == nil {
+		return nil, ErrOffline
+	}
+	if !s.has(FeatureNixServices) {
+		return nil, ErrNoNix
+	}
+	openCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	st, err := s.link.Open(openCtx)
+	if err != nil {
+		return nil, ErrOffline
+	}
+	if err := exchange(openCtx, st, StreamHeader{NixLogs: appliedID, Logs: &req}); err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
 // Online lists the connected relays.
 func (h *Hub) Online() []string {
 	h.mu.Lock()
@@ -382,7 +493,7 @@ func (h *Hub) State() map[string]RelayState {
 			Transport: s.link.Transport(),
 			RTTMs:     float64(st.RTT.Microseconds()) / 1000, BytesSent: st.BytesSent, BytesReceived: st.BytesReceived,
 			PacketsLost: st.PacketsLost, Streams: s.active.Load(),
-			Features: append([]string{}, s.hello.Features...),
+			Features: append([]string{}, s.hello.Features...), Nix: s.hello.Nix,
 		}
 		if rs.Transport == TransportWebSocket {
 			rs.Fallback = s.hello.Fallback

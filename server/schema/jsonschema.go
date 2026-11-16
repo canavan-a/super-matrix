@@ -21,6 +21,7 @@ func JSONSchema() map[string]any {
 var (
 	listType = reflect.TypeOf(List{})
 	hashType = reflect.TypeOf(Hash{})
+	textType = reflect.TypeOf(Text{})
 )
 
 type mapper interface{ mapItem() any }
@@ -37,6 +38,11 @@ func typeSchema(t reflect.Type, f reflect.StructField) map[string]any {
 	case t == hashType:
 		out = structSchema(t)
 		out["required"] = []string{"hash"}
+	case t == textType:
+		out["type"] = "string"
+	case t.Kind() == reflect.Map:
+		out["type"] = "object"
+		out["additionalProperties"] = map[string]any{"type": "string"}
 	case reflect.PointerTo(t).Implements(reflect.TypeOf((*mapper)(nil)).Elem()):
 		item := reflect.New(t).Interface().(mapper).mapItem()
 		out["type"] = "object"

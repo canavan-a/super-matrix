@@ -408,6 +408,23 @@ func (d *Document) check() Errors {
 			checkUI(join("bridges", k), d.Bridges.Items[k], d.Bridges.Items[k].UI)
 		}
 	}
+	if d.NixServices != nil {
+		unique("nix_services", d.NixServices.Keys)
+		for _, k := range d.NixServices.Keys {
+			ns := d.NixServices.Items[k]
+			at := join("nix_services", k)
+			checkUI(at, ns, ns.UI)
+			if ns.Source != nil {
+				errs = append(errs, Error{Path: join(at, "source"), Msg: FileRefMsg})
+			}
+			if ns.Relays != nil {
+				unique(at+".relays", ns.Relays.Keys)
+				for _, r := range ns.Relays.Keys {
+					checkUI(at+".relays."+r, ns.Relays.Items[r], ns.Relays.Items[r].UI)
+				}
+			}
+		}
+	}
 	return errs
 }
 
@@ -421,4 +438,24 @@ func (d *Document) YAML() ([]byte, error) {
 		return nil, err
 	}
 	return yaml.JSONToYAML(js)
+}
+
+// FileRefMsg is the answer to a file reference in a document the server
+// reads: only the CLI, which can see the files, resolves them.
+const FileRefMsg = "file references (source:, {file: …}) are read by supermatrix-admin schema plan|apply -f, which inlines the files; paste the contents, or apply from the CLI"
+
+func (t *Text) decodePath(raw json.RawMessage, path string) error {
+	if isNull(raw) {
+		return nil
+	}
+	if err := json.Unmarshal(raw, &t.Content); err != nil {
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(raw, &obj) == nil {
+			if _, ok := obj["file"]; ok {
+				return errAt(path, "%s", FileRefMsg)
+			}
+		}
+		return errAt(path, "expected the file's contents as a string")
+	}
+	return nil
 }

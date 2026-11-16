@@ -72,7 +72,7 @@ func (a *API) schemaStatus(c *gin.Context) {
 	if st != nil {
 		o := a.owned()
 		strict := []string{}
-		for _, coll := range []string{collDomains, collIPGroups, collEmailGroups, collDeployments, collBridges} {
+		for _, coll := range []string{collDomains, collIPGroups, collEmailGroups, collDeployments, collBridges, collNixServices} {
 			if o.strict(coll) {
 				strict = append(strict, coll)
 			}
@@ -200,6 +200,7 @@ func (a *API) schemaApply(c *gin.Context) {
 	}
 	if out.Changed {
 		a.changed()
+		a.nixChanged()
 	}
 	c.JSON(http.StatusOK, gin.H{"applied": out.Changed, "revision": revision, "plan": out})
 }

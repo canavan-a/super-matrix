@@ -245,5 +245,8 @@ func exportDocument(db *gorm.DB) (*schema.Document, error) {
 		doc.Bridges.Set(b.Slug, n.bridgeItem(b, bg[b.ID]))
 	}
 	doc.Bridges.Sort()
+	if err := exportNixServices(db, n, doc); err != nil {
+		return nil, err
+	}
 	return doc, nil
 }

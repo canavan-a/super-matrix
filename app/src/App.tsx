@@ -33,10 +33,13 @@ import {HomeScreen} from './screens/HomeScreen';
 import {LoginScreen} from './screens/LoginScreen';
 import {DomainsScreen} from './screens/DomainsScreen';
 import {GroupsScreen} from './screens/GroupsScreen';
+import {AppliedNixScreen} from './screens/AppliedNixScreen';
+import {NixServiceScreen} from './screens/NixServiceScreen';
+import {NixServicesScreen} from './screens/NixServicesScreen';
 import {RelaysScreen} from './screens/RelaysScreen';
 import {SchemaScreen} from './screens/SchemaScreen';
 import {SettingsScreen} from './screens/SettingsScreen';
-import {init, overrideEndsAt, overrideOn, refresh, useStore, wake} from './store';
+import {getState, init, overrideEndsAt, overrideOn, refresh, supports, useStore, wake} from './store';
 import {Theme, ThemeProvider, useTheme} from './theme';
 
 /**
@@ -77,6 +80,9 @@ const TITLES: Record<Route['name'], string> = {
   domains: 'Domains',
   groups: 'Groups',
   schema: 'Schema',
+  nix: 'Nix services',
+  nixService: 'Nix service',
+  appliedNix: 'Nix service',
   settings: 'Settings',
 };
 
@@ -90,6 +96,8 @@ function AppInner(): React.JSX.Element {
   const deployments = useStore(s => s.deployments);
   const bridges = useStore(s => s.bridges);
   const schema = useStore(s => s.schema);
+  const hasNix = useStore(s => supports(s.info, 'nix-services'));
+  const nixFailing = useStore(s => s.nixServices.some(x => x.applied.some(a => a.failing)));
   // When override runs out, refetch so the locks come back (and the
   // banner goes) without waiting for something else to refresh.
   const overrideEnd = overrideEndsAt(schema);
@@ -104,8 +112,21 @@ function AppInner(): React.JSX.Element {
 
   const [route, setRoute] = useState<Route>({name: 'home'});
   const navigate = useCallback((next: Route) => setRoute(next), []);
-  // The schema screen opens from Settings, so it goes back there.
-  const goBack = useCallback(() => setRoute(r => (r.name === 'schema' ? {name: 'settings'} : {name: 'home'})), []);
+  // The schema screen opens from Settings; Nix screens go back up their
+  // own list.
+  const goBack = useCallback(
+    () =>
+      setRoute(r => {
+        if (r.name === 'schema') return {name: 'settings'};
+        if (r.name === 'nixService') return {name: 'nix'};
+        if (r.name === 'appliedNix') {
+          const s = getState().nixServices.find(x => x.applied.some(a => a.id === r.id));
+          return s ? {name: 'nixService', id: s.id} : {name: 'nix'};
+        }
+        return {name: 'home'};
+      }),
+    [],
+  );
 
   // Back in the foreground: refetch, and reconnect the live socket at once.
   useEffect(() => {
@@ -234,6 +255,15 @@ function AppInner(): React.JSX.Element {
             <Pressable style={styles.headerIconButton} onPress={() => navigate({name: 'groups'})} accessibilityLabel="Groups">
               <Icon name="network" size={20} color={theme.text} />
             </Pressable>
+            {hasNix && (
+              <Pressable
+                style={styles.headerIconButton}
+                onPress={() => navigate({name: 'nix'})}
+                accessibilityLabel={nixFailing ? 'Nix services (one is failing)' : 'Nix services'}>
+                <Icon name="snowflake" size={20} color={theme.text} />
+                {nixFailing && <View style={[styles.alertDot, {backgroundColor: theme.danger}]} />}
+              </Pressable>
+            )}
             <Pressable style={styles.headerIconButton} onPress={() => navigate({name: 'relays'})} accessibilityLabel="Relays">
               <Icon name="server" size={20} color={theme.text} />
             </Pressable>
@@ -251,6 +281,9 @@ function AppInner(): React.JSX.Element {
         {route.name === 'relays' && <RelaysScreen />}
         {route.name === 'domains' && <DomainsScreen />}
         {route.name === 'groups' && <GroupsScreen />}
+        {route.name === 'nix' && <NixServicesScreen onNavigate={navigate} />}
+        {route.name === 'nixService' && <NixServiceScreen key={route.id ?? 'new'} id={route.id} onNavigate={navigate} />}
+        {route.name === 'appliedNix' && <AppliedNixScreen key={route.id} id={route.id} onNavigate={navigate} />}
         {route.name === 'schema' && <SchemaScreen />}
         {route.name === 'settings' && <SettingsScreen onOpenSchema={() => navigate({name: 'schema'})} />}
       </View>
@@ -298,6 +331,7 @@ function makeStyles(theme: Theme) {
     headerTitle: {fontSize: 16, fontWeight: '700', color: theme.text},
     headerSubtitle: {fontSize: 11, color: theme.textMuted, marginTop: 3},
     headerIconButton: {width: 36, height: 36, alignItems: 'center', justifyContent: 'center'},
+    alertDot: {position: 'absolute', top: 7, right: 7, width: 7, height: 7, borderRadius: 4},
     body: {flex: 1, backgroundColor: theme.bg},
   });
 }

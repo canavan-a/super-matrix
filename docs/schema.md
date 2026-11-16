@@ -1,7 +1,8 @@
 # Declarative schema
 
 A schema document describes a server's domains, IP and email groups,
-deployments (with their path rules) and bridges in YAML or JSON. The server
+deployments (with their path rules), bridges and Nix services in YAML or
+JSON. The server
 **plans** a document (shows what applying it would change) and **applies**
 it in one transaction: all of it, or nothing. Keep the document in git and
 apply it from CI, from the command line, or by pasting it into the app's
@@ -89,13 +90,90 @@ Bridges: `name` (the slug), `protocol` (`tcp`), `enabled` (`true`), `public`
 Passwords are only ever bcrypt hashes (`htpasswd -nbBC 10 "" 'secret' | cut
 -d: -f2`); there is no way to put a plain password in a document.
 
+## Nix services
+
+`nix_services` is keyed by slug: a flake and how to run it, and under
+`relays` (by relay slug) where it runs. See [protocol.md](protocol.md#nix-services)
+for how relays build and run them, and what a relay needs first.
+
+```yaml
+nix_services:
+  "...": true                    # Nix services made in the app stay
+  uptime-kuma:
+    name: Uptime Kuma
+    source: ./nix/uptime-kuma    # flake.nix, flake.lock and the rest (the CLI reads it)
+    env: {PORT: "3001"}
+    relay_env: [DB_PASSWORD]     # set in /etc/supermatrix/nix-services/uptime-kuma.env on each relay
+    relays:
+      homelab: {}
+      pi:
+        env: {PORT: "3002"}      # merged over env on this relay
+        ui: [desired]            # the app may start and stop it
+  tiny:
+    run: devshell
+    command: [python, -m, http.server, "8000"]
+    flake: |
+      {
+        inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+        outputs = { nixpkgs, ... }: let pkgs = nixpkgs.legacyPackages.x86_64-linux; in {
+          devShells.x86_64-linux.default = pkgs.mkShell { packages = [ pkgs.python3 ]; };
+        };
+      }
+    relays: {homelab: {}}
+```
+
+| Nix service field | Default |
+|---|---|
+| `name` | the slug |
+| `run` | `package` (`app`, `devshell`) |
+| `attr` | `default`: the output is `packages.<system>.<attr>` (or `apps…`, `devShells…`) |
+| `command` | `[]`: the package's main program, or the app's; required for `devshell` |
+| `env` | `{}` |
+| `relay_env` | `[]`: names each relay must set in its `<slug>.env` |
+| `restart` | `always` (`on-failure`, `no`) |
+| `teardown.remove_state` | `true`: removing it also deletes `/var/lib/smx/<slug>` |
+| `flake` | required: `flake.nix`, inline |
+| `flake_lock` | none: see below |
+| `files` | `{}`: other files by path, inline |
+| `relays` | none: `{<relay slug>: {env, desired}}`, `desired` is `running` (or `stopped`) |
+
+**Files.** The server only ever gets files inline. `supermatrix-admin schema
+plan|apply -f` reads references for you, relative to the document:
+`source: DIR` (a directory with `flake.nix`; `flake.lock` and every other
+file come along, except `.git`, `.direnv`, `node_modules`, symlinks such as
+`result`, and globs listed in a `.supermatrixignore` there; 1 MiB at most) and
+`{file: PATH}` in place of `flake`, `flake_lock` or an entry of `files`. A path
+outside the document's directory needs `-allow-outside`. The server refuses
+a document that still has references (the app's Schema screen can't read your
+files), and `schema export -split nix -o supermatrix.yaml` writes each Nix
+service's files to `nix/<slug>/` and the document with `source:`, to move
+services made in the app into git.
+
+**The lock** is the schema's only when the document gives it (`flake_lock`,
+or a `flake.lock` in `source`): it's pinned, and relays build with it as is.
+Left out, it's the relays' (one makes it when it builds, and once you accept it
+every relay uses it), and an apply never clears it; `schema export` includes it, so
+committing the export pins it. Plans show files by digest
+(`sha256:1a2b3c… (412 bytes)`) rather than in full.
+
+**Relays.** A relay has to be ready for Nix services (`nix.ready` in
+`GET /v1/relays`) to be added under `relays`: a plan that puts a service on a
+relay that's too old, has no Nix agent, fails its host check or hasn't Nix
+services turned on fails with the reason. One already there that stops being
+ready is a warning. Dropping a relay from `relays` tears the service down
+there; dropping the service tears it down everywhere.
+
+`schema apply -wait` follows the services after applying until each is
+running (or stopped, as asked), and exits 1 if one fails to build or start;
+`schema nix-status` shows where each one is.
+
 ## What the schema manages
 
 **Strict by default.** What a document lists is the whole truth:
 
 - an item it lists has exactly the values given, and its missing fields
   take the defaults above;
-- a collection it lists (`deployments`, `bridges`, `domains`, `groups.ip`,
+- a collection it lists (`deployments`, `bridges`, `nix_services`, `domains`, `groups.ip`,
   `groups.email`) loses whatever the document doesn't list;
 - a collection it leaves out is left alone entirely (`version: 1` alone
   changes nothing).
@@ -105,7 +183,7 @@ Three markers hand things back to the app:
 | Marker | Where | Means |
 |---|---|---|
 | `"..."` | an entry of a list | the list keeps entries added in the app; the schema's own entries are kept too, and removing one from the document removes it from the server |
-| `"...": true` | a key of a map (`deployments`, `bridges`, `groups.ip`, `groups.email`, `path_rules`) | items made in the app stay; only items the schema made or took charge of are deleted when the document drops them |
+| `"...": true` | a key of a map (`deployments`, `bridges`, `nix_services`, `relays`, `groups.ip`, `groups.email`, `path_rules`) | items made in the app stay; only items the schema made or took charge of are deleted when the document drops them |
 | `ui: [field, …]` | an item | those fields are the app's: a value given for one is only used when the item is created |
 
 Quote the marker (`"..."`): bare `...` ends a YAML document.
@@ -168,16 +246,18 @@ schema locks; what they change shows up as drift in the next plan.)
 
 ## CI
 
-Plan on pull requests, apply on the main branch. With GitHub Actions:
+Plan on pull requests, apply on the main branch, with `supermatrix-admin`:
+it reads the files `source:` and `{file: …}` point at, which the server can't.
+With GitHub Actions:
 
 ```yaml
 name: supermatrix
 on:
   pull_request:
-    paths: [supermatrix.yaml]
+    paths: [supermatrix.yaml, "nix/**"]
   push:
     branches: [main]
-    paths: [supermatrix.yaml]
+    paths: [supermatrix.yaml, "nix/**"]
 jobs:
   schema:
     runs-on: ubuntu-latest
@@ -186,25 +266,27 @@ jobs:
       SUPERMATRIX_TOKEN: ${{ secrets.SUPERMATRIX_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: "1.26"}
+      - name: Get supermatrix-admin
+        run: |
+          git clone --depth 1 https://github.com/canavan-a/super-matrix "$RUNNER_TEMP/sm"
+          (cd "$RUNNER_TEMP/sm/server" && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/bin/supermatrix-admin" ./cmd/supermatrix-admin)
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Plan
         if: github.event_name == 'pull_request'
-        run: |
-          curl -fsS -X POST "$SUPERMATRIX_SERVER/v1/schema/plan" \
-            -H "Authorization: Bearer $SUPERMATRIX_TOKEN" \
-            -H "Content-Type: application/yaml" \
-            --data-binary @supermatrix.yaml | jq .
+        # exit 2 means the plan has changes, which is fine here
+        run: supermatrix-admin schema plan -f supermatrix.yaml || [ $? = 2 ]
       - name: Apply
         if: github.event_name == 'push'
-        run: |
-          curl -fsS -X POST "$SUPERMATRIX_SERVER/v1/schema/apply" \
-            -H "Authorization: Bearer $SUPERMATRIX_TOKEN" \
-            -H "Content-Type: application/yaml" \
-            --data-binary @supermatrix.yaml | jq .
+        # -wait: fail the job if a Nix service doesn't build or start
+        run: supermatrix-admin schema apply -f supermatrix.yaml -wait
 ```
 
-With the `supermatrix-admin` binary on the runner, replace the curl calls
-with `supermatrix-admin schema plan -f supermatrix.yaml` (exit 2 marks a
-plan with changes; allow it with `|| [ $? = 2 ]`) and `… schema apply`.
+A document without file references can also go straight to the API, e.g.
+`curl -fsS -X POST "$SUPERMATRIX_SERVER/v1/schema/plan" -H "Authorization:
+Bearer $SUPERMATRIX_TOKEN" -H "Content-Type: application/yaml" --data-binary
+@supermatrix.yaml` (and `/v1/schema/apply`).
 
 ## Versions
 

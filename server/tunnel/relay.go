@@ -47,7 +47,10 @@ type Relay struct {
 	// Features overrides what the relay says it supports (nil: everything
 	// this build can do; tests use it to act like an older relay).
 	Features []string
-	Logf     func(format string, args ...any)
+	// Nix is the Nix agent on this machine (nil: none; the relay then
+	// doesn't run Nix services).
+	Nix  NixAgent
+	Logf func(format string, args ...any)
 
 	mu      sync.Mutex
 	targets map[string]Target
@@ -350,7 +353,11 @@ func (r *Relay) serve(ctx context.Context, c *conn) (*conn, error) {
 		return writeLine(c.ctrl, m)
 	}
 	hello := func(fallback string) error {
-		return send(Control{Type: "hello", Hello: &Hello{Version: r.Version, Hostname: host, Fallback: fallback, Features: r.features()}})
+		h := &Hello{Version: r.Version, Hostname: host, Fallback: fallback, Features: r.features()}
+		if h.HasFeature(FeatureNixServices) {
+			h.Nix = r.Nix.Host()
+		}
+		return send(Control{Type: "hello", Hello: h})
 	}
 	if err := hello(c.fallback); err != nil {
 		c.link.Close()
@@ -379,6 +386,12 @@ func (r *Relay) serve(ctx context.Context, c *conn) (*conn, error) {
 	done := make(chan struct{})
 	defer close(done)
 	go r.healthLoop(done, kick, send)
+	if r.Nix != nil {
+		go r.nixLoop(done, send, func() error {
+			_, fb := r.Status()
+			return hello(fb)
+		})
+	}
 	go func() {
 		lr := newLineReader(c.ctrl)
 		for {
@@ -392,6 +405,16 @@ func (r *Relay) serve(ctx context.Context, c *conn) (*conn, error) {
 				r.setTargets(m.Targets)
 			case "listeners":
 				r.setListeners(m.Listeners)
+			case "nixServices":
+				if r.Nix != nil {
+					r.Nix.Set(m.NixServices)
+				}
+				continue
+			case "nixAction":
+				if r.Nix != nil && m.NixAction != nil {
+					r.Nix.Action(*m.NixAction)
+				}
+				continue
 			default:
 				continue
 			}
@@ -502,6 +525,10 @@ func (r *Relay) handle(st net.Conn) {
 	var h StreamHeader
 	if err := readLine(st, &h); err != nil {
 		st.Close()
+		return
+	}
+	if h.NixLogs != "" {
+		r.serveNixLogs(st, h)
 		return
 	}
 	t, ok := r.target(h.Deployment)

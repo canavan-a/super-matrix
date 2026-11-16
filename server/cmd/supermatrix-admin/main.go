@@ -120,7 +120,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: supermatrix-admin stats | list | revoke-sessions | rate-limit HOST ... | path-rules HOST ... | schema plan|apply|export ...")
+	fmt.Fprintln(os.Stderr, "usage: supermatrix-admin stats | list | revoke-sessions | rate-limit HOST ... | path-rules HOST ... | schema plan|apply|export|nix-status ...")
 	os.Exit(2)
 }
 
