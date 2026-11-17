@@ -38,8 +38,9 @@ type Relay struct {
 	// machine must run the Nix agent too. NixHost is the agent's last host
 	// check (tunnel.NixHost as JSON, "" for none).
 	AllowNixServices bool
-	// ManageNixServices lets the relay apply the Nix services it defined to
-	// itself, and manage them there, with its token.
+	// ManageNixServices lets the relay define Nix services (for every relay,
+	// like the admin's), apply them to itself, and manage them there, with
+	// its token.
 	ManageNixServices bool
 	NixHost           string
 }
@@ -401,9 +402,6 @@ type NixService struct {
 	Files      string
 	FlakeLock  string
 	LockPinned bool
-	// OwnerRelayID is the relay that defined it (nil: the admin's or the
-	// schema's); it runs only there until adopted.
-	OwnerRelayID *string
 	// PendingLock is a flake.lock a relay (PendingLockFrom) made, waiting to
 	// be accepted.
 	PendingLock     string

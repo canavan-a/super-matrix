@@ -180,16 +180,13 @@ func (p *planner) nixService(slug, path string, sn *schema.NixService) {
 		s.LockPinned = false
 	}
 	p.ownRow(kindNixService, s.ID, "", "")
-	// The schema's services are the admin's, even one a relay defined.
-	adopted := s.OwnerRelayID != nil
-	s.OwnerRelayID = nil
 	if create {
 		s.Slug = slug
 		if p.dbErr(p.tx.Create(&s).Error) {
 			return
 		}
 		p.op("create", kindNixService, slug, nil)
-	} else if changes := diff(before, nixServiceItem(s, withLock)); p.write(kindNixService, s.ID, slug, changes) || s.LockPinned != existing.LockPinned || adopted {
+	} else if changes := diff(before, nixServiceItem(s, withLock)); p.write(kindNixService, s.ID, slug, changes) || s.LockPinned != existing.LockPinned {
 		s.UpdatedAt = p.a.now()
 		if p.dbErr(p.tx.Select("*").Save(&s).Error) {
 			return

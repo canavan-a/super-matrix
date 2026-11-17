@@ -40,7 +40,7 @@ relay in the app first). These talk to the running relay's local API:
   supermatrix-relay token delete HOST|ID TOKEN_ID
   supermatrix-relay version
 
-This relay's own Nix services (as root; "Manage its Nix services" on in the app):
+Nix services, run on this relay (as root; "Manage its Nix services" on in the app):
 
   supermatrix-relay nix list | create | apply | …   see supermatrix-relay nix help
 

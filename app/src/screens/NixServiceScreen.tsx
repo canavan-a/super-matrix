@@ -10,7 +10,7 @@ import {PhaseBadge, progressLine} from '../nix/phase';
 import {canPickFolder, pickFolder} from '../nix/pickFolder';
 import {platformConfirm} from '../platformConfirm';
 import type {Route} from '../routes';
-import {adoptNixService, applyNixService, decideNixLock, deleteNixService, relockNixService, saveNixService, useStore} from '../store';
+import {applyNixService, decideNixLock, deleteNixService, relockNixService, saveNixService, useStore} from '../store';
 import {Theme, useTheme} from '../theme';
 
 const STARTER = `{
@@ -156,14 +156,6 @@ export function NixServiceScreen({id, onNavigate}: {id: string | null; onNavigat
   return (
     <ScrollView style={styles.fill} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <ManagedNotice managed={service?.managed} noun="Nix service" />
-      {service?.ownerRelayName ? (
-        <Notice kind="info" title={`Defined by ${service.ownerRelayName}`}>
-          {`${service.ownerRelayName} made this with its token (Manage its Nix services), so it runs only there and ${service.ownerRelayName} can change it. Adopt it to make it yours: you can then run it on any relay, and ${service.ownerRelayName} can no longer change it.`}
-        </Notice>
-      ) : null}
-      {service?.ownerRelayName ? (
-        <Button label="Adopt it" kind="secondary" onPress={() => adoptNixService(service.id).catch(fail)} style={styles.spaced} />
-      ) : null}
       {service?.pendingLock ? <PendingLock service={service} onError={fail} /> : null}
       <Title>{service ? service.name : 'New Nix service'}</Title>
 
@@ -382,14 +374,12 @@ export function NixServiceScreen({id, onNavigate}: {id: string | null; onNavigat
                     <Text style={styles.relay}>{r.name}</Text>
                     {!r.nix?.ready ? (
                       <Text style={styles.meta}>{r.nix?.reason ?? 'This server is too old to say'}</Text>
-                    ) : service.ownerRelayId && service.ownerRelayId !== r.id ? (
-                      <Text style={styles.meta}>Defined by {service.ownerRelayName}: adopt it to run it here</Text>
                     ) : null}
                   </View>
                   <Button
                     label="Apply"
                     kind="secondary"
-                    disabled={!r.nix?.ready || (!!service.ownerRelayId && service.ownerRelayId !== r.id)}
+                    disabled={!r.nix?.ready}
                     onPress={() =>
                       applyNixService(service.id, r.id)
                         .then(a => onNavigate({name: 'appliedNix', id: a.id}))

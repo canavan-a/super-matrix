@@ -6,37 +6,26 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
-
-	"main/database"
 )
 
-// Relays and their own Nix services. With "Manage its Nix services" on
+// Relays and Nix services. With "Manage its Nix services" on
 // (Relay.ManageNixServices, off by default, like "Manage its
-// deployments"), a relay's token can define Nix services, apply them to
-// itself, and run, change and remove them there. What it defines is its
-// own (owner_relay_id): only it and the admin see it, and it runs only on
-// that relay; the admin can adopt one to share it. A relay never sees or
-// touches the admin's services. They run as root on its machine, which is
-// why it's a permission of its own.
+// deployments"), a relay's token can see and define Nix services, apply
+// them to itself, and run, change and remove them there. Services are
+// shared: one a relay defines is like the admin's, and can run on any
+// relay. A relay only ever applies to itself, and only manages what's
+// applied to it. They run as root on its machine, which is why it's a
+// permission of its own.
 //
 // These routes are only reachable with the relay token itself, never
 // through the relay's unauthenticated local API (which only forwards
 // /me, /domains and /deployments), so on the machine it takes root.
 
-// nixScope is the Nix services the caller can see: all of them for the
-// admin, its own for a relay.
-func (a *API) nixScope(c *gin.Context) *gorm.DB {
-	if r := relayOf(c); r != nil {
-		return a.db.Where("owner_relay_id = ?", r.ID)
-	}
-	return a.db
-}
-
 // appliedScope is the applied services the caller can see: all for the
-// admin; for a relay, its own services on itself.
+// admin; for a relay, the ones on itself.
 func (a *API) appliedScope(c *gin.Context) *gorm.DB {
 	if r := relayOf(c); r != nil {
-		return a.db.Where("relay_id = ? AND nix_service_id IN (SELECT id FROM nix_services WHERE owner_relay_id = ?)", r.ID, r.ID)
+		return a.db.Where("relay_id = ?", r.ID)
 	}
 	return a.db
 }
@@ -54,31 +43,6 @@ func (a *API) requireManageNix(c *gin.Context) {
 	if c.Request.Method != http.MethodGet && c.Writer.Status() < 300 {
 		log.Printf("relay %q: %s %s", r.Name, c.Request.Method, c.Request.URL.Path)
 	}
-}
-
-// ownedElsewhere refuses putting a relay's own service on another relay.
-func ownedElsewhere(s *database.NixService, relayID string) error {
-	if s.OwnerRelayID != nil && *s.OwnerRelayID != relayID {
-		return conflictError(s.Slug + " was defined by a relay and runs only there: adopt it first to run it elsewhere")
-	}
-	return nil
-}
-
-// adoptNixService makes a relay's service the admin's: the relay can no
-// longer change it, and it can run on any relay.
-func (a *API) adoptNixService(c *gin.Context) {
-	s := a.findNixService(c)
-	if s == nil {
-		return
-	}
-	if s.OwnerRelayID == nil {
-		abort(c, http.StatusConflict, "it's already yours")
-		return
-	}
-	a.db.Model(s).Updates(map[string]any{"owner_relay_id": nil, "updated_at": a.now()})
-	s.OwnerRelayID = nil
-	a.nixChanged()
-	c.JSON(http.StatusOK, a.nixServiceFull(*s))
 }
 
 // nixLockDecision accepts ({accept: true}) or turns down a flake.lock a
@@ -113,7 +77,7 @@ func (a *API) nixLockDecision(c *gin.Context) {
 	a.db.Model(s).Updates(upd)
 	s.PendingLock, s.PendingLockFrom = "", ""
 	a.nixChanged()
-	c.JSON(http.StatusOK, a.nixServiceFull(*s))
+	c.JSON(http.StatusOK, a.nixServiceFull(c, *s))
 }
 
 func (a *API) relayNixRoutes(self *gin.RouterGroup) {

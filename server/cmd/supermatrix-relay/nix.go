@@ -18,14 +18,15 @@ import (
 	"main/nixsrc"
 )
 
-// supermatrix-relay nix …: this relay's own Nix services, once "Manage its
+// supermatrix-relay nix …: Nix services (every relay's, the same list the
+// admin sees) and running them on this relay, once "Manage its
 // Nix services" is on for it in the app. Unlike the deployment commands,
 // these never go through the local API (which has no auth, and anything on
 // the machine could use): they read the relay's token from its root-only
 // file and talk to the server directly. Nix services run as root here, so
 // managing them takes root too.
 
-const nixUsage = `supermatrix-relay nix: this relay's own Nix services (needs root, and
+const nixUsage = `supermatrix-relay nix: Nix services, run here (needs root, and
 "Manage its Nix services" on for the relay in the app)
 
   supermatrix-relay nix list                      its Nix services, and what each is doing here

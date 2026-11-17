@@ -659,9 +659,6 @@ export interface NixService {
   flakeLock: string;
   /** given, rather than made by a relay */
   lockPinned: boolean;
-  /** the relay that defined it ("" for yours): it runs only there until you adopt it */
-  ownerRelayId?: string;
-  ownerRelayName?: string;
   /** a flake.lock a relay (pendingLockFrom, its name) made, waiting for you; "" for none */
   pendingLock?: string;
   pendingLockFrom?: string;
@@ -722,7 +719,6 @@ export const nixApi = {
   /** the journal's last lines, or (build) the last build's whole log */
   logs: (server: string, token: string, aid: string, build: boolean) =>
     request<string>(server, 'GET', `/v1/applied-nix-services/${aid}/logs?${build ? 'build=1' : 'lines=300'}`, token, undefined, {asText: true}),
-  adopt: (server: string, token: string, id: string) => request<NixService>(server, 'POST', `/v1/nix-services/${id}/adopt`, token),
   /** accept (or turn down) a relay's pending flake.lock */
   decideLock: (server: string, token: string, id: string, accept: boolean) =>
     request<NixService>(server, 'POST', `/v1/nix-services/${id}/lock`, token, {accept}),

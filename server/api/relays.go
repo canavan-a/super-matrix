@@ -29,8 +29,8 @@ type relayDTO struct {
 	Deployments int64      `json:"deployments"`
 	// ManageDeployments: the relay can manage its own deployments.
 	ManageDeployments bool `json:"manageDeployments"`
-	// ManageNixServices: the relay can define Nix services and run them on
-	// itself with its token.
+	// ManageNixServices: the relay can define Nix services (for every
+	// relay) and run them on itself with its token.
 	ManageNixServices bool `json:"manageNixServices"`
 	// Features is what the relay said it supports when it last connected.
 	Features []string `json:"features"`
