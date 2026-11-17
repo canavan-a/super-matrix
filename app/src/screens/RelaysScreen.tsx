@@ -286,7 +286,7 @@ function RelayRow({
                 label="Manage its Nix services"
                 hint={
                   r.manageNixServices
-                    ? `As root on ${hostname || r.name}, supermatrix-relay nix create/apply/remove defines Nix services and runs them there (only there, and only its own).`
+                    ? `As root on ${hostname || r.name}, supermatrix-relay nix create/apply/remove defines Nix services (for every relay, like yours) and runs them there.`
                     : `Lets root on ${hostname || r.name} define Nix services and run them on ${r.name}, with the supermatrix-relay CLI and the relay's token.`
                 }
                 value={!!r.manageNixServices}
@@ -299,7 +299,7 @@ function RelayRow({
                   }
                   platformConfirm(
                     `Let ${r.name} manage its Nix services?`,
-                    `Root on ${hostname || 'its machine'} can then define Nix services and run them there as root, without you. It can't touch your services or run anything on other relays.`,
+                    `Root on ${hostname || 'its machine'} can then define Nix services and run them there as root, without you. Services are shared: it can also change, relock or delete any of them, yours included, and that reaches every relay running them. It can only start them on itself.`,
                     'Allow',
                     apply,
                     false,

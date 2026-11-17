@@ -708,12 +708,6 @@ export function allApplied(services: NixService[]): {service: NixService; applie
   return services.flatMap(service => service.applied.map(applied => ({service, applied})));
 }
 
-/** Makes a relay's Nix service yours: it can then run on any relay, and the relay can't change it. */
-export async function adoptNixService(id: string): Promise<void> {
-  await authed((s, t) => nixApi.adopt(s, t, id));
-  await refresh().catch(() => {});
-}
-
 /** Accepts (or turns down) the flake.lock a relay made for the service. */
 export async function decideNixLock(id: string, accept: boolean): Promise<void> {
   await authed((s, t) => nixApi.decideLock(s, t, id, accept));

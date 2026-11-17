@@ -445,29 +445,28 @@ delete | token`.
 
 ## Relays managing their Nix services
 
-Like deployments, a relay can manage Nix services of its own once **Manage
-its Nix services** is on for it (`PATCH /v1/relays/:id
-{"manageNixServices": true}`; off by default, and separate from managing
-deployments, since these run as root on its machine). With its token it can
-then define Nix services, apply them to itself, and run, change and remove
-them there:
+Like deployments, a relay can manage Nix services once **Manage its Nix
+services** is on for it (`PATCH /v1/relays/:id {"manageNixServices": true}`;
+off by default, and separate from managing deployments, since these run as
+root on its machine). With its token it can then see and define Nix
+services, apply them to itself, and run, change and remove them there:
 
 | | |
 |---|---|
-| `GET/POST /v1/relay/nix-services`, `GET/PATCH/DELETE /v1/relay/nix-services/:id` | its own services (id or slug) |
+| `GET/POST /v1/relay/nix-services`, `GET/PATCH/DELETE /v1/relay/nix-services/:id` | every Nix service (id or slug), as for the admin |
 | `POST /v1/relay/nix-services/:id/relock` | drop the lock |
 | `POST /v1/relay/nix-services/:id/applied` | apply it to itself (no body needed) |
-| `GET /v1/relay/applied-nix-services`, `GET/PATCH/DELETE …/:aid`, `POST …/:aid/restart \| rebuild \| rollback`, `GET …/:aid/events`, `GET …/:aid/logs` | as the admin routes, for its own services on itself |
+| `GET /v1/relay/applied-nix-services`, `GET/PATCH/DELETE …/:aid`, `POST …/:aid/restart \| rebuild \| rollback`, `GET …/:aid/events`, `GET …/:aid/logs` | as the admin routes, for what's applied to itself |
 
-Everything answers 403 while the permission is off. What a relay defines is
-its own (`ownerRelayId`): only it and the admin see it, it runs only on that
-relay (`relayId` naming any other is a 403, and the admin applying it
-elsewhere a 409), and its locks are taken as they come. A relay never sees or
-touches the admin's services, including ones applied to it. **Adopting** one
-(`POST /v1/nix-services/:id/adopt`, or a schema listing it) makes it the
-admin's: it can then run anywhere, and the relay can no longer change it. A
-relay's services go with the relay when it's deleted. A schema that lists
-`nix_services` in full refuses new ones, as for deployments.
+Everything answers 403 while the permission is off. **Services are shared:**
+one a relay defines is like the admin's, with no owner. The admin and every
+other relay see it, and it can run on any relay. A relay only ever applies
+to itself (`relayId` naming any other is a 403), and only sees and manages
+what's applied to itself. A change it makes to a service (or deleting it)
+reaches every relay running that service, as the admin's would, which is
+part of why the permission is off by default. Deleting a relay leaves the
+services it defined. A schema that lists `nix_services` in full refuses new
+ones, as for deployments.
 
 **On the relay's machine.** These routes are never on the relay's local API
 (which has no auth). `supermatrix-relay nix list | show | create | update |
@@ -570,11 +569,14 @@ variables that must be set there: until they are, the service waits in
 
 **Locks.** A service without a `flake.lock` is locked by a relay when it
 builds it, which sends it back (`nixLock`, `base` the hash of the lock it was
-given). For a relay's own service (see below) the server takes it at once.
-For anyone else's it's held as **pending** (`pendingLock`, `pendingLockFrom`)
-until it's accepted, `POST /v1/nix-services/:id/lock {"accept": true}` (or
-turned down, `false`): one relay can't change what the others run. The first
-waits; later ones are ignored until it's decided. Until then each relay keeps
+given). If that relay manages Nix services (it could change the service
+anyway) and no other relay runs it, the server takes it at once. Otherwise
+it's held as **pending** (`pendingLock`, `pendingLockFrom`) until it's
+accepted, `POST /v1/nix-services/:id/lock {"accept": true}` (or turned down,
+`false`), so a lock one relay made doesn't quietly reach the others. (A relay
+that manages Nix services can still change a service's files, or relock it,
+directly; see above.) The first waits; later ones are ignored until it's
+decided. Until then each relay keeps
 the lock it made for itself. Accepted, every relay builds with it. A lock
 that was given (`lockPinned`) is used as is and never replaced, so pinning
 one skips all this. `POST /v1/nix-services/:id/relock` drops the lock (and
@@ -619,7 +621,6 @@ with the log tail of failures.
 | `GET/POST /v1/nix-services`, `GET/PATCH/DELETE /v1/nix-services/:id` (id or slug) | Nix services, each with `applied` (where it runs) and `managed` |
 | `POST /v1/nix-services/:id/relock` | drop the lock |
 | `POST /v1/nix-services/:id/lock {accept}` | accept or turn down a relay's pending lock |
-| `POST /v1/nix-services/:id/adopt` | make a relay's own service yours (it can then run anywhere; the relay can no longer change it) |
 | `POST /v1/nix-services/:id/applied {relayId, desired?, env?}` | apply it to a relay (id or slug) |
 | `GET /v1/applied-nix-services[?relayId=]`, `GET/PATCH/DELETE /v1/applied-nix-services/:aid` | applied services: `{desired, env}` can change; DELETE tears it down |
 | `POST /v1/applied-nix-services/:aid/restart \| rebuild \| rollback` | 409 when the relay is offline |

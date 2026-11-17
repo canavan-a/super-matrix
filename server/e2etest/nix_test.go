@@ -39,12 +39,12 @@ type nixApplied struct {
 }
 
 type nixSvc struct {
-	ID, Slug, FlakeLock                                        string
-	PendingLock, PendingLockFrom, OwnerRelayID, OwnerRelayName string
-	LockPinned                                                 bool
-	Files                                                      map[string]string
-	Applied                                                    []nixApplied
-	Managed                                                    *struct{ Fields []string }
+	ID, Slug, FlakeLock          string
+	PendingLock, PendingLockFrom string
+	LockPinned                   bool
+	Files                        map[string]string
+	Applied                      []nixApplied
+	Managed                      *struct{ Fields []string }
 }
 
 // startNixAgent runs a Nix agent (with a fake runner) on a socket of its

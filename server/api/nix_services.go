@@ -61,10 +61,6 @@ type nixServiceDTO struct {
 	Files      map[string]string `json:"files"`
 	FlakeLock  string            `json:"flakeLock"`
 	LockPinned bool              `json:"lockPinned"`
-	// OwnerRelayID (and its name) is the relay that defined it ("" for the
-	// admin's): it runs only there until adopted.
-	OwnerRelayID   string `json:"ownerRelayId"`
-	OwnerRelayName string `json:"ownerRelayName"`
 	// PendingLock is a flake.lock a relay (PendingLockFrom, its name) made,
 	// waiting to be accepted; "" for none.
 	PendingLock     string    `json:"pendingLock"`
@@ -188,9 +184,6 @@ func (a *API) nixServiceOut(o *ownIndex, s database.NixService, applied []databa
 		CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Applied: []appliedDTO{},
 		Managed: o.managed(kindNixService, s.ID),
 	}
-	if s.OwnerRelayID != nil {
-		out.OwnerRelayID, out.OwnerRelayName = *s.OwnerRelayID, relays[*s.OwnerRelayID].Name
-	}
 	if s.PendingLock != "" {
 		out.PendingLock, out.PendingLockFrom = s.PendingLock, relays[s.PendingLockFrom].Name
 	}
@@ -201,14 +194,16 @@ func (a *API) nixServiceOut(o *ownIndex, s database.NixService, applied []databa
 	return out
 }
 
-func (a *API) nixServiceFull(s database.NixService) nixServiceDTO {
+// nixServiceFull is a service with where it's applied, as the caller may
+// see it: a relay only sees itself there (not the others' env).
+func (a *API) nixServiceFull(c *gin.Context, s database.NixService) nixServiceDTO {
 	var applied []database.AppliedNixService
-	a.db.Where("nix_service_id = ?", s.ID).Find(&applied)
+	a.appliedScope(c).Where("nix_service_id = ?", s.ID).Find(&applied)
 	return a.nixServiceOut(a.owned(), s, applied, a.nixRelays(a.db), a.hub.State())
 }
 
 func (a *API) findNixService(c *gin.Context) *database.NixService {
-	s, err := database.First[database.NixService](a.nixScope(c).Where("id = ? OR slug = ?", c.Param("id"), c.Param("id")))
+	s, err := database.First[database.NixService](a.db.Where("id = ? OR slug = ?", c.Param("id"), c.Param("id")))
 	if err != nil {
 		abort(c, http.StatusInternalServerError, "server error")
 		return nil
@@ -235,7 +230,7 @@ func (a *API) findApplied(c *gin.Context) *database.AppliedNixService {
 
 func (a *API) listNixServices(c *gin.Context) {
 	var ss []database.NixService
-	if err := a.nixScope(c).Order("name").Find(&ss).Error; err != nil {
+	if err := a.db.Order("name").Find(&ss).Error; err != nil {
 		abort(c, http.StatusInternalServerError, "server error")
 		return
 	}
@@ -255,7 +250,7 @@ func (a *API) listNixServices(c *gin.Context) {
 
 func (a *API) getNixService(c *gin.Context) {
 	if s := a.findNixService(c); s != nil {
-		c.JSON(http.StatusOK, a.nixServiceFull(*s))
+		c.JSON(http.StatusOK, a.nixServiceFull(c, *s))
 	}
 }
 
@@ -491,12 +486,8 @@ func (a *API) createNixService(c *gin.Context) {
 	if !a.schemaAllowsCreate(c, collNixServices) {
 		return
 	}
+	// One a relay defines is like any other: it can run on every relay.
 	s := a.newNixService()
-	if r := relayOf(c); r != nil {
-		// A relay's own: only it (and the admin) sees it, and it runs
-		// only there.
-		s.OwnerRelayID = &r.ID
-	}
 	if in.Name == nil && in.Slug != nil {
 		in.Name = in.Slug
 	}
@@ -517,7 +508,7 @@ func (a *API) createNixService(c *gin.Context) {
 		return
 	}
 	a.nixChanged()
-	c.JSON(http.StatusCreated, a.nixServiceFull(s))
+	c.JSON(http.StatusCreated, a.nixServiceFull(c, s))
 }
 
 func (a *API) updateNixService(c *gin.Context) {
@@ -559,7 +550,7 @@ func (a *API) updateNixService(c *gin.Context) {
 		return
 	}
 	a.nixChanged()
-	c.JSON(http.StatusOK, a.nixServiceFull(*s))
+	c.JSON(http.StatusOK, a.nixServiceFull(c, *s))
 }
 
 // relockNixService drops the service's flake.lock (pinned or not): the
@@ -577,7 +568,7 @@ func (a *API) relockNixService(c *gin.Context) {
 	a.db.Model(s).Updates(map[string]any{"flake_lock": "", "lock_pinned": false, "pending_lock": "", "pending_lock_from": "", "updated_at": a.now()})
 	s.FlakeLock, s.LockPinned, s.PendingLock, s.PendingLockFrom = "", false, "", ""
 	a.nixChanged()
-	c.JSON(http.StatusOK, a.nixServiceFull(*s))
+	c.JSON(http.StatusOK, a.nixServiceFull(c, *s))
 }
 
 func (a *API) deleteNixService(c *gin.Context) {
@@ -669,7 +660,7 @@ func (a *API) createApplied(c *gin.Context) {
 		}
 	}
 	if self := relayOf(c); self != nil {
-		// A relay applies its services to itself, and only to itself.
+		// A relay applies services to itself, and only to itself.
 		if in.RelayID != nil && *in.RelayID != self.ID && *in.RelayID != self.Slug {
 			abort(c, http.StatusForbidden, "a relay can only run Nix services on itself")
 			return
@@ -692,10 +683,6 @@ func (a *API) createApplied(c *gin.Context) {
 		return
 	}
 	if err := nixRelayOK(r); err != nil {
-		a.bridgeFail(c, err)
-		return
-	}
-	if err := ownedElsewhere(s, r.ID); err != nil {
 		a.bridgeFail(c, err)
 		return
 	}
@@ -1103,10 +1090,11 @@ func (a *API) onNixKnown(relayID string, known []string) {
 }
 
 // onNixLock takes a flake.lock a relay made, if the service's lock isn't
-// pinned and the relay built from the lock the server has now. A relay's
-// own service takes it at once. Anyone else's holds it as pending until
-// it's accepted, so one relay can't change what the others run: the
-// first one waits, later ones are ignored until it's decided.
+// pinned and the relay built from the lock the server has now. A relay
+// that manages Nix services (it could change the service anyway) and is
+// the only one running it gets it taken at once. Otherwise it's held as
+// pending until it's accepted, so the admin sees what the others would
+// pick up: the first one waits, later ones are ignored until it's decided.
 func (a *API) onNixLock(relayID string, l tunnel.NixLock) {
 	ap, err := database.First[database.AppliedNixService](a.db.Where("id = ? AND relay_id = ? AND removing = 0", l.ID, relayID))
 	if err != nil || ap == nil || ap.NixServiceID == nil {
@@ -1122,30 +1110,32 @@ func (a *API) onNixLock(relayID string, l tunnel.NixLock) {
 	if err != nil || s == nil || s.LockPinned || tunnel.HashLock(s.FlakeLock) != l.Base || s.FlakeLock == l.Lock {
 		return
 	}
-	name := relayID
+	name, manages := relayID, false
 	if r, _ := database.First[database.Relay](a.db.Where("id = ?", relayID)); r != nil {
-		name = r.Name
+		name, manages = r.Name, r.ManageNixServices
 	}
-	if s.OwnerRelayID == nil || *s.OwnerRelayID != relayID {
-		upd := a.db.Model(&database.NixService{}).Where("id = ? AND flake_lock = ? AND lock_pinned = 0 AND pending_lock = ''", s.ID, s.FlakeLock).
-			Updates(map[string]any{"pending_lock": l.Lock, "pending_lock_from": relayID, "updated_at": a.now()})
-		if upd.RowsAffected > 0 {
-			a.nixEvent(a.db, ap.ID, "lock-pending", "flake.lock from "+name+" is waiting for you to accept it", "")
-			a.watchers.send(gin.H{"type": "changed"})
+	var others int64
+	a.db.Model(&database.AppliedNixService{}).Where("nix_service_id = ? AND relay_id != ? AND removing = 0", s.ID, relayID).Count(&others)
+	if manages && others == 0 {
+		upd := a.db.Model(&database.NixService{}).Where("id = ? AND flake_lock = ? AND lock_pinned = 0", s.ID, s.FlakeLock).
+			Updates(map[string]any{"flake_lock": l.Lock, "pending_lock": "", "pending_lock_from": "", "updated_at": a.now()})
+		if upd.RowsAffected == 0 {
+			return
 		}
+		msg := "flake.lock made on " + name
+		if s.FlakeLock != "" {
+			msg = "flake.lock updated on " + name + " (the flake's inputs changed)"
+		}
+		a.nixEvent(a.db, ap.ID, "locked", msg, "")
+		a.nixChanged()
 		return
 	}
-	upd := a.db.Model(&database.NixService{}).Where("id = ? AND flake_lock = ? AND lock_pinned = 0", s.ID, s.FlakeLock).
-		Updates(map[string]any{"flake_lock": l.Lock, "updated_at": a.now()})
-	if upd.RowsAffected == 0 {
-		return
+	upd := a.db.Model(&database.NixService{}).Where("id = ? AND flake_lock = ? AND lock_pinned = 0 AND pending_lock = ''", s.ID, s.FlakeLock).
+		Updates(map[string]any{"pending_lock": l.Lock, "pending_lock_from": relayID, "updated_at": a.now()})
+	if upd.RowsAffected > 0 {
+		a.nixEvent(a.db, ap.ID, "lock-pending", "flake.lock from "+name+" is waiting for you to accept it", "")
+		a.watchers.send(gin.H{"type": "changed"})
 	}
-	msg := "flake.lock made on " + name
-	if s.FlakeLock != "" {
-		msg = "flake.lock updated on " + name + " (the flake's inputs changed)"
-	}
-	a.nixEvent(a.db, ap.ID, "locked", msg, "")
-	a.nixChanged()
 }
 
 func (a *API) nixRoutes(v1, admin *gin.RouterGroup) {
@@ -1155,7 +1145,6 @@ func (a *API) nixRoutes(v1, admin *gin.RouterGroup) {
 	admin.PATCH("/nix-services/:id", a.updateNixService)
 	admin.DELETE("/nix-services/:id", a.deleteNixService)
 	admin.POST("/nix-services/:id/relock", a.relockNixService)
-	admin.POST("/nix-services/:id/adopt", a.adoptNixService)
 	admin.POST("/nix-services/:id/lock", a.nixLockDecision)
 	admin.POST("/nix-services/:id/applied", a.createApplied)
 	admin.GET("/applied-nix-services", a.listApplied)

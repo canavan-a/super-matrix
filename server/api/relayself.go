@@ -94,6 +94,6 @@ func (a *API) relayRoutes(v1 *gin.RouterGroup) {
 	m.POST("/deployments/:id/tokens", a.createToken)
 	m.DELETE("/deployments/:id/tokens/:tid", a.deleteToken)
 
-	// Its own Nix services, with "Manage its Nix services" on.
+	// Nix services, with "Manage its Nix services" on.
 	a.relayNixRoutes(self)
 }
