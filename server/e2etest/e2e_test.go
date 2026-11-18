@@ -184,6 +184,7 @@ func target(t *testing.T, tls bool) (host string, port int) {
 			"auth": r.Header.Get("Authorization"), "token": r.Header.Get("X-Supermatrix-Token"),
 			"cookie": r.Header.Get("Cookie"), "xff": r.Header.Get("X-Forwarded-For"),
 			"xfh": r.Header.Get("X-Forwarded-Host"), "user": r.Header.Get("X-Supermatrix-User"),
+			"cip": r.Header.Get("Super-Matrix-Client-IP"),
 		})
 	})
 	var s *httptest.Server
@@ -278,7 +279,7 @@ func TestEndToEnd(t *testing.T) {
 		}
 		// Host is rewritten to the target unless preserveHost is on, and the
 		// public host is passed along.
-		if !strings.Contains(body, fmt.Sprintf(`"host":"%s:%d"`, th, tp)) || !strings.Contains(body, `"xfh":"app.test"`) || !strings.Contains(body, `"xff":"127.0.0.1"`) {
+		if !strings.Contains(body, fmt.Sprintf(`"host":"%s:%d"`, th, tp)) || !strings.Contains(body, `"xfh":"app.test"`) || !strings.Contains(body, `"xff":"127.0.0.1"`) || !strings.Contains(body, `"cip":"127.0.0.1"`) {
 			t.Fatalf("headers: %s", body)
 		}
 		e.api("PATCH", "/v1/deployments/"+d.ID, map[string]any{"preserveHost": true}, 200, nil)

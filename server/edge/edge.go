@@ -157,6 +157,12 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 type clientIPKey struct{}
 
+// ClientIPHeader carries the request's resolved client IP as a single,
+// unambiguous value, so a service behind a deployment can read it directly
+// instead of parsing X-Forwarded-For (which may hold a chain of addresses,
+// or none, depending on what's in front of the edge).
+const ClientIPHeader = "Super-Matrix-Client-IP"
+
 func (e *Edge) rewrite(pr *httputil.ProxyRequest) {
 	ent := pr.In.Context().Value(ctxKey{}).(*registry.Entry)
 	pr.Out.URL.Scheme = "http"
@@ -171,6 +177,7 @@ func (e *Edge) rewrite(pr *httputil.ProxyRequest) {
 	if ip, _ := pr.In.Context().Value(clientIPKey{}).(string); ip != "" {
 		pr.Out.Header.Set("X-Forwarded-For", ip)
 		pr.Out.Header.Set("X-Real-IP", ip)
+		pr.Out.Header.Set(ClientIPHeader, ip)
 	}
 	if e.cfg.TLSOn() {
 		pr.Out.Header.Set("X-Forwarded-Proto", "https")
